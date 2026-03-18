@@ -1,0 +1,36 @@
+{
+  "name": "hv-api",
+  "version": "1.0.0",
+  "description": "Core orchestrator backend for Hybrid Vector cognitive biometric identity platform",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node-dev --respawn src/index.ts",
+    "lint": "eslint src/**/*.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "biometric",
+    "identity",
+    "authentication",
+    "cognitive",
+    "facial-recognition"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.6.7",
+    "express": "^5.0.0",
+    "jose": "^5.2.2",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.11.19",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

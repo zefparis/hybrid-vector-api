@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: hv-api
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npm run build
+    startCommand: node dist/index.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: DEEPFACE_API_URL
+        sync: false
+      - key: DEEPFACE_API_KEY
+        sync: false
+      - key: HCS_API_URL
+        sync: false
+      - key: HCS_API_KEY
+        sync: false
+      - key: HV_API_KEY
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: 3600
