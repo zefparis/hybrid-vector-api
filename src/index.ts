@@ -5,6 +5,7 @@ import { errorHandler } from './middleware/errorHandler';
 import healthRouter from './routes/health';
 import sessionRouter from './routes/session';
 import enrollRouter from './routes/enroll';
+import edguardRouter from './routes/edguard';
 
 const app: Express = express();
 
@@ -61,6 +62,7 @@ app.use(healthRouter);
 app.use(apiKeyMiddleware);
 app.use(sessionRouter);
 app.use(enrollRouter);
+app.use('/edguard', apiKeyMiddleware, edguardRouter);
 
 app.use(errorHandler);
 

@@ -6,6 +6,8 @@ const envSchema = z.object({
   DEEPFACE_HMAC_SECRET: z.string().optional(),
   HCS_API_URL: z.string().url(),
   HCS_API_KEY: z.string().min(1),
+  SUPABASE_URL: z.string().url().optional(),
+  SUPABASE_SERVICE_KEY: z.string().optional(),
   HV_API_KEY: z.string().min(1),
   JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
   JWT_EXPIRES_IN: z.coerce.number().int().positive().default(3600),

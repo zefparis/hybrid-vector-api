@@ -1,0 +1,419 @@
+import { randomUUID } from 'crypto';
+import { NextFunction, Request, Response, Router } from 'express';
+import { z } from 'zod';
+import { analyzeface, verifyFaces } from '../services/deepfaceService';
+import { supabase } from '../services/supabaseService';
+import { AppError, DeepfaceAnalyzeResponse } from '../types';
+
+type CognitiveBaseline = {
+  stroop_score: number;
+  reaction_time_ms: number;
+  nback_score: number;
+};
+
+type AlertLevel = 'CLEAR' | 'WARNING' | 'ALERT';
+
+interface EdguardEnrollmentRow {
+  id: string;
+  student_id: string;
+  institution_id: string;
+  embedding: string | number[];
+  cognitive_baseline: CognitiveBaseline | null;
+  enrolled_at: string;
+  verified_count: number;
+}
+
+interface VerificationResult {
+  enrollment: EdguardEnrollmentRow;
+  similarity: number;
+  verified: boolean;
+  liveness: boolean;
+  liveness_score: number;
+  identity_confidence: number;
+}
+
+const ARCFACE_THRESHOLD = 0.68;
+
+const enrollSchema = z.object({
+  student_id: z.string().min(1, 'student_id is required'),
+  institution_id: z.string().min(1, 'institution_id is required'),
+  official_photo_b64: z.string().min(1, 'official_photo_b64 is required'),
+  selfie_b64: z.string().min(1, 'selfie_b64 is required'),
+  cognitive_baseline: z
+    .object({
+      stroop_score: z.number().min(0).max(1),
+      reaction_time_ms: z.number().positive(),
+      nback_score: z.number().min(0).max(1),
+    })
+    .optional(),
+});
+
+const verifySchema = z.object({
+  student_id: z.string().min(1, 'student_id is required'),
+  selfie_b64: z.string().min(1, 'selfie_b64 is required'),
+  include_cognitive: z.boolean().default(false),
+});
+
+const checkpointSchema = z.object({
+  student_id: z.string().min(1, 'student_id is required'),
+  checkpoint_number: z.number().int().positive(),
+  face_b64: z.string().min(1, 'face_b64 is required'),
+  cognitive_score: z.number().min(0).max(1).optional(),
+  session_id: z.string().min(1, 'session_id is required'),
+});
+
+const router = Router();
+
+function getSupabaseClient() {
+  if (!supabase) {
+    throw new AppError(500, 'SUPABASE_NOT_CONFIGURED', 'Supabase is not configured');
+  }
+
+  return supabase;
+}
+
+function sendApiError(
+  res: Response,
+  statusCode: number,
+  error: string,
+  message: string,
+  extra: Record<string, unknown> = {}
+): void {
+  res.status(statusCode).json({
+    success: false,
+    error,
+    message,
+    timestamp: new Date().toISOString(),
+    ...extra,
+  });
+}
+
+function isCognitiveBaseline(value: unknown): value is CognitiveBaseline {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+
+  const candidate = value as Partial<CognitiveBaseline>;
+  return (
+    typeof candidate.stroop_score === 'number' &&
+    typeof candidate.reaction_time_ms === 'number' &&
+    typeof candidate.nback_score === 'number'
+  );
+}
+
+function parseCognitiveBaseline(value: unknown): CognitiveBaseline | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (isCognitiveBaseline(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      return isCognitiveBaseline(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function parseEmbedding(value: unknown): number[] | null {
+  if (Array.isArray(value) && value.every((entry) => typeof entry === 'number')) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (Array.isArray(parsed) && parsed.every((entry) => typeof entry === 'number')) {
+        return parsed;
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function normalizeSimilarity(similarity: number): number {
+  if (!Number.isFinite(similarity)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(1, similarity));
+}
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length === 0 || b.length === 0) {
+    return 0;
+  }
+
+  const length = Math.min(a.length, b.length);
+  let dot = 0;
+  let magA = 0;
+  let magB = 0;
+
+  for (let index = 0; index < length; index += 1) {
+    const aValue = a[index];
+    const bValue = b[index];
+    dot += aValue * bValue;
+    magA += aValue * aValue;
+    magB += bValue * bValue;
+  }
+
+  if (magA === 0 || magB === 0) {
+    return 0;
+  }
+
+  return dot / Math.sqrt(magA * magB);
+}
+
+async function fetchEnrollment(studentId: string): Promise<EdguardEnrollmentRow | null> {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('edguard_enrollments')
+    .select('*')
+    .eq('student_id', studentId)
+    .maybeSingle();
+
+  if (error) {
+    throw new AppError(500, 'SUPABASE_QUERY_FAILED', error.message);
+  }
+
+  return (data as EdguardEnrollmentRow | null) ?? null;
+}
+
+async function incrementVerifiedCount(studentId: string, currentCount: number): Promise<void> {
+  const client = getSupabaseClient();
+  const { error } = await client
+    .from('edguard_enrollments')
+    .update({ verified_count: currentCount + 1 })
+    .eq('student_id', studentId);
+
+  if (error) {
+    throw new AppError(500, 'SUPABASE_UPDATE_FAILED', error.message);
+  }
+}
+
+async function verifyEnrollmentFace(studentId: string, selfieB64: string): Promise<VerificationResult> {
+  const enrollment = await fetchEnrollment(studentId);
+
+  if (!enrollment) {
+    throw new AppError(404, 'STUDENT_NOT_ENROLLED', 'Student is not enrolled');
+  }
+
+  const storedEmbedding = parseEmbedding(enrollment.embedding);
+  if (!storedEmbedding) {
+    throw new AppError(500, 'STORED_EMBEDDING_INVALID', 'Stored embedding is invalid');
+  }
+
+  const liveAnalysis = await analyzeface(selfieB64, true);
+  const liveEmbedding = parseEmbedding(liveAnalysis.embedding);
+
+  if (!liveEmbedding) {
+    throw new AppError(422, 'EMBEDDING_FAILED', 'Failed to extract live face embedding');
+  }
+
+  const rawSimilarity = cosineSimilarity(storedEmbedding, liveEmbedding);
+  const similarity = normalizeSimilarity(rawSimilarity);
+  const verified = rawSimilarity >= ARCFACE_THRESHOLD;
+  const liveness = liveAnalysis.liveness ?? false;
+  const livenessScoreResult = liveAnalysis as DeepfaceAnalyzeResponse & {
+    liveness_score?: number;
+  };
+  const livenessScore = typeof livenessScoreResult.liveness_score === 'number'
+    ? livenessScoreResult.liveness_score
+    : (liveness ? 1 : 0);
+  const identityConfidence = similarity;
+
+  if (verified) {
+    await incrementVerifiedCount(studentId, enrollment.verified_count ?? 0);
+  }
+
+  return {
+    enrollment,
+    similarity,
+    verified,
+    liveness,
+    liveness_score: livenessScore,
+    identity_confidence: identityConfidence,
+  };
+}
+
+router.post(
+  '/enroll',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const validatedBody = enrollSchema.parse(req.body);
+      const {
+        student_id,
+        institution_id,
+        official_photo_b64,
+        selfie_b64,
+        cognitive_baseline,
+      } = validatedBody;
+
+      const [verificationSettled, embeddingSettled] = await Promise.allSettled([
+        verifyFaces(official_photo_b64, selfie_b64),
+        analyzeface(selfie_b64, true),
+      ]);
+
+      const verification =
+        verificationSettled.status === 'fulfilled'
+          ? verificationSettled.value
+          : {
+              verified: false,
+              confidence: 0,
+              error: 'DEEPFACE_UNAVAILABLE',
+            };
+
+      if (!verification.verified || verification.confidence < 0.65) {
+        sendApiError(res, 422, 'IDENTITY_MISMATCH', 'Identity verification failed', {
+          confidence: verification.confidence,
+        });
+        return;
+      }
+
+      const embeddingResult =
+        embeddingSettled.status === 'fulfilled'
+          ? embeddingSettled.value
+          : {
+              face_detected: false,
+              liveness: false,
+              confidence: 0,
+              embedding: undefined,
+              error: 'DEEPFACE_UNAVAILABLE',
+            };
+
+      const embedding = parseEmbedding(embeddingResult.embedding);
+      if (!embedding) {
+        sendApiError(res, 422, 'EMBEDDING_FAILED', 'Failed to extract face embedding');
+        return;
+      }
+
+      const client = getSupabaseClient();
+      const existingEnrollment = await fetchEnrollment(student_id);
+      const enrolledAt = new Date().toISOString();
+      const enrollmentRow: EdguardEnrollmentRow = {
+        id: existingEnrollment?.id ?? randomUUID(),
+        student_id,
+        institution_id,
+        embedding: JSON.stringify(embedding),
+        cognitive_baseline: cognitive_baseline ?? existingEnrollment?.cognitive_baseline ?? null,
+        enrolled_at: enrolledAt,
+        verified_count: existingEnrollment?.verified_count ?? 0,
+      };
+
+      const { error } = await client
+        .from('edguard_enrollments')
+        .upsert(enrollmentRow, { onConflict: 'student_id' });
+
+      if (error) {
+        throw new AppError(500, 'SUPABASE_UPSERT_FAILED', error.message);
+      }
+
+      res.status(201).json({
+        success: true,
+        student_id,
+        institution_id,
+        enrolled: true,
+        identity_confidence: verification.confidence,
+        embedding_dims: embedding.length,
+        enrolled_at: enrolledAt,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.post(
+  '/verify',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const validatedBody = verifySchema.parse(req.body);
+      const { student_id, selfie_b64 } = validatedBody;
+
+      const verification = await verifyEnrollmentFace(student_id, selfie_b64);
+
+      res.json({
+        success: true,
+        student_id,
+        verified: verification.verified,
+        similarity: verification.similarity,
+        threshold: ARCFACE_THRESHOLD,
+        liveness: verification.liveness,
+        liveness_score: verification.liveness_score,
+        identity_confidence: verification.identity_confidence,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.post(
+  '/session/checkpoint',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const validatedBody = checkpointSchema.parse(req.body);
+      const { student_id, checkpoint_number, face_b64, cognitive_score, session_id } =
+        validatedBody;
+
+      const verification = await verifyEnrollmentFace(student_id, face_b64);
+      const baseline = parseCognitiveBaseline(verification.enrollment.cognitive_baseline);
+      const cognitiveDeviation =
+        typeof cognitive_score === 'number' && baseline
+          ? Math.abs(cognitive_score - baseline.stroop_score)
+          : 0;
+      const cognitiveAlert = cognitiveDeviation > 0.35;
+
+      const facialMatch = verification.similarity >= ARCFACE_THRESHOLD ? 1 : 0;
+      const livenessOk = verification.liveness ? 1 : 0;
+      const cognitiveOk = cognitiveAlert ? 0 : 1;
+      const trustScore = (facialMatch * 0.5 + livenessOk * 0.3 + cognitiveOk * 0.2) * 100;
+
+      let alertLevel: AlertLevel = 'ALERT';
+      if (trustScore >= 80) {
+        alertLevel = 'CLEAR';
+      } else if (trustScore >= 60) {
+        alertLevel = 'WARNING';
+      }
+
+      const flags: string[] = [];
+      if (facialMatch === 0) {
+        flags.push('FACE_MISMATCH');
+      }
+      if (livenessOk === 0) {
+        flags.push('LIVENESS_FAILED');
+      }
+      if (cognitiveAlert) {
+        flags.push('COGNITIVE_DEVIATION');
+      }
+
+      res.json({
+        success: true,
+        session_id,
+        student_id,
+        checkpoint_number,
+        trust_score: Math.round(trustScore),
+        alert_level: alertLevel,
+        verified: verification.verified,
+        liveness: verification.liveness,
+        cognitive_deviation: cognitiveDeviation,
+        flags,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+export default router;
