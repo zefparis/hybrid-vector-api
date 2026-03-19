@@ -2,7 +2,7 @@ import axios, { AxiosError } from 'axios';
 import { config } from '../config';
 import { DeepfaceAnalyzeResponse } from '../types';
 
-const TIMEOUT_MS = 15000;
+const TIMEOUT_MS = 30000;
 
 interface DeepfaceApiResponse {
   face_detected: boolean;

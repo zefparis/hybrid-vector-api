@@ -14,8 +14,10 @@ export async function getCognitiveScore(
   cognitiveSessionId: string
 ): Promise<HcsScoreResponse> {
   try {
+    const url = `${config.HCS_API_URL}/api/sessions/${cognitiveSessionId}/score`;
+    console.log('HCS ingest URL:', url);
     const response = await axios.get<HcsApiResponse>(
-      `${config.HCS_API_URL}/api/sessions/${cognitiveSessionId}/score`,
+      url,
       {
         headers: {
           'X-API-Key': config.HCS_API_KEY,
