@@ -69,6 +69,26 @@ const PORT = config.PORT;
 app.listen(PORT, () => {
   console.log(`🚀 hv-api running on port ${PORT}`);
   console.log(`📍 Environment: ${config.NODE_ENV}`);
+
+  // Pre-warm deepface-api 30s after startup
+  setTimeout(async () => {
+    try {
+      await fetch(`${config.DEEPFACE_API_URL}/health`);
+      console.log('deepface-api pre-warmed on startup');
+    } catch {}
+  }, 30000);
+
+  // Keep deepface-api warm - ping every 10 minutes
+  setInterval(async () => {
+    try {
+      await fetch(`${config.DEEPFACE_API_URL}/health`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      console.log('deepface-api keep-alive ping OK');
+    } catch {
+      console.log('deepface-api keep-alive ping failed - cold start expected');
+    }
+  }, 10 * 60 * 1000);
 });
 
 export default app;
