@@ -3,6 +3,7 @@ import { z } from 'zod';
 const envSchema = z.object({
   DEEPFACE_API_URL: z.string().url(),
   DEEPFACE_API_KEY: z.string().min(1),
+  DEEPFACE_HMAC_SECRET: z.string().optional(),
   HCS_API_URL: z.string().url(),
   HCS_API_KEY: z.string().min(1),
   HV_API_KEY: z.string().min(1),

@@ -1,4 +1,5 @@
 import axios, { AxiosError } from 'axios';
+import crypto from 'crypto';
 import { config } from '../config';
 import { DeepfaceAnalyzeResponse } from '../types';
 
@@ -13,6 +14,22 @@ interface DeepfaceApiResponse {
   embedding?: number[];
 }
 
+function signRequest(body: string, secret: string): {
+  'X-Timestamp': string;
+  'X-Signature': string;
+} {
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const mac = crypto
+    .createHmac('sha256', secret)
+    .update(`${timestamp}.${body}`)
+    .digest('hex');
+
+  return {
+    'X-Timestamp': timestamp,
+    'X-Signature': `sha256=${mac}`,
+  };
+}
+
 function isTimeoutError(error: unknown): boolean {
   const axiosError = error as AxiosError;
   return axiosError.code === 'ECONNABORTED' || axiosError.code === 'ETIMEDOUT';
@@ -24,16 +41,22 @@ async function analyzeDeepfaceOnce(
   timeoutMs: number,
   t0: number
 ): Promise<DeepfaceApiResponse> {
+  const bodyStr = JSON.stringify({
+    image_b64: imageB64,
+    extract_embedding: extractEmbedding,
+  });
+  const extraHeaders = config.DEEPFACE_HMAC_SECRET
+    ? signRequest(bodyStr, config.DEEPFACE_HMAC_SECRET)
+    : {};
+
   const response = await axios.post<DeepfaceApiResponse>(
     `${config.DEEPFACE_API_URL}/analyze`,
-    {
-      image_b64: imageB64,
-      extract_embedding: extractEmbedding,
-    },
+    bodyStr,
     {
       headers: {
         'X-API-Key': config.DEEPFACE_API_KEY,
         'Content-Type': 'application/json',
+        ...extraHeaders,
       },
       timeout: timeoutMs,
     }
@@ -123,16 +146,22 @@ export async function verifyFaces(
   image2B64: string
 ): Promise<{ verified: boolean; confidence: number; error?: string }> {
   try {
+    const bodyStr = JSON.stringify({
+      image1_b64: image1B64,
+      image2_b64: image2B64,
+    });
+    const extraHeaders = config.DEEPFACE_HMAC_SECRET
+      ? signRequest(bodyStr, config.DEEPFACE_HMAC_SECRET)
+      : {};
+
     const response = await axios.post<{ verified: boolean; confidence: number }>(
       `${config.DEEPFACE_API_URL}/analyze/verify`,
-      {
-        image1_b64: image1B64,
-        image2_b64: image2B64,
-      },
+      bodyStr,
       {
         headers: {
           'X-API-Key': config.DEEPFACE_API_KEY,
           'Content-Type': 'application/json',
+          ...extraHeaders,
         },
         timeout: VERIFY_TIMEOUT_MS,
       }
