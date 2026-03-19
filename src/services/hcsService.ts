@@ -13,9 +13,10 @@ interface HcsApiResponse {
 export async function getCognitiveScore(
   cognitiveSessionId: string
 ): Promise<HcsScoreResponse> {
+  const t0 = Date.now();
   try {
     const url = `${config.HCS_API_URL}/api/sessions/${cognitiveSessionId}/score`;
-    console.log('HCS ingest URL:', url);
+    console.log('[HCS] calling:', url);
     const response = await axios.get<HcsApiResponse>(
       url,
       {
@@ -27,6 +28,7 @@ export async function getCognitiveScore(
       }
     );
 
+    console.log(`[HCS] done: ${Date.now() - t0}ms, status:`, response.status);
     const data = response.data;
 
     return {

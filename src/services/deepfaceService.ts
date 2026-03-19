@@ -15,10 +15,13 @@ export async function analyzeface(
   imageB64: string,
   extractEmbedding: boolean = false
 ): Promise<DeepfaceAnalyzeResponse> {
-  console.log('face_b64 length:', imageB64?.length ?? 0);
-  console.log('face_b64 prefix (first 50):', imageB64?.slice(0, 50) ?? '');
+  const t0 = Date.now();
+  const url = `${config.DEEPFACE_API_URL}/analyze`;
+  console.log('[DEEPFACE] calling:', url);
+  console.log('[DEEPFACE] face_b64 length:', imageB64?.length ?? 0);
 
   try {
+    console.log('[DEEPFACE] fetch start');
     const response = await axios.post<DeepfaceApiResponse>(
       `${config.DEEPFACE_API_URL}/analyze`,
       {
@@ -34,8 +37,13 @@ export async function analyzeface(
       }
     );
 
+    console.log(`[DEEPFACE] fetch done: ${Date.now() - t0}ms`);
+    console.log('[DEEPFACE] status:', response.status);
+
     const data = response.data;
-    console.log('deepface response:', JSON.stringify(data));
+    console.log(`[DEEPFACE] parsed: ${Date.now() - t0}ms`);
+    console.log('[DEEPFACE] face_detected:', data.face_detected);
+    console.log('[DEEPFACE] liveness:', data.liveness);
 
     return {
       face_detected: data.face_detected ?? false,

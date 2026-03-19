@@ -38,16 +38,20 @@ async function signJwt(payload: Omit<JwtPayload, 'iat' | 'exp'>): Promise<string
 router.post(
   '/auth/session',
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    const startTime = Date.now();
+    const t0 = Date.now();
+    console.log('[HV] session start');
 
     try {
       const validatedBody = sessionRequestSchema.parse(req.body);
+      console.log(`[HV] validation: ${Date.now() - t0}ms`);
       const { tenant_id, user_id, face_image_b64, cognitive_session_id } = validatedBody;
 
+      console.log('[HV] calling deepface + HCS in parallel');
       const [deepfaceSettled, hcsSettled] = await Promise.allSettled([
         analyzeface(face_image_b64, false),
         getCognitiveScore(cognitive_session_id),
       ]);
+      console.log(`[HV] allSettled done: ${Date.now() - t0}ms`);
 
       let deepfaceResult: DeepfaceAnalyzeResponse;
       if (deepfaceSettled.status === 'fulfilled') {
@@ -61,6 +65,7 @@ router.post(
           error: 'DEEPFACE_UNAVAILABLE',
         };
       }
+      console.log('[HV] deepface result:', JSON.stringify(deepfaceResult));
 
       let hcsResult: HcsScoreResponse;
       if (hcsSettled.status === 'fulfilled') {
@@ -73,8 +78,11 @@ router.post(
           error: 'HCS_UNAVAILABLE',
         };
       }
+      console.log('[HV] hcs result:', JSON.stringify(hcsResult));
 
       const trustScoreResult = computeTrustScore(deepfaceResult, hcsResult);
+      console.log(`[HV] trust score computed: ${Date.now() - t0}ms`);
+      console.log(`[HV] trust_score=${trustScoreResult.trust_score} is_human=${trustScoreResult.is_human}`);
 
       const jwtPayload: Omit<JwtPayload, 'iat' | 'exp'> = {
         sub: user_id,
@@ -86,7 +94,7 @@ router.post(
 
       const token = await signJwt(jwtPayload);
 
-      const processingMs = Date.now() - startTime;
+      const processingMs = Date.now() - t0;
 
       console.log(
         `Session: tenant=${tenant_id}, user=${user_id}, trust_score=${trustScoreResult.trust_score}, is_human=${trustScoreResult.is_human}, processing_ms=${processingMs}`
@@ -106,6 +114,7 @@ router.post(
       };
 
       res.json(response);
+      console.log(`[HV] response sent: ${Date.now() - t0}ms TOTAL`);
 
       // Fire-and-forget: push session to HCS-U7 backend (never blocks, never throws)
       if (config.HCS_INGEST_URL && config.HCS_WORKER_SHARED_SECRET) {
