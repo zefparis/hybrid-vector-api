@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import * as jose from 'jose';
+import { randomUUID } from 'crypto';
 import { config } from '../config';
 import { analyzeface } from '../services/deepfaceService';
 import { getCognitiveScore } from '../services/hcsService';
@@ -105,6 +106,45 @@ router.post(
       };
 
       res.json(response);
+
+      // Fire-and-forget: push session to HCS-U7 backend (never blocks, never throws)
+      if (config.HCS_INGEST_URL && config.HCS_WORKER_SHARED_SECRET) {
+        const hvSessionId = randomUUID();
+        const ingestUrl = config.HCS_INGEST_URL;
+        const secret = config.HCS_WORKER_SHARED_SECRET;
+        const bd = trustScoreResult.breakdown;
+
+        setImmediate(() => {
+          fetch(ingestUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Worker-Auth': secret,
+              'X-HCS-Worker-Auth': secret,
+            },
+            body: JSON.stringify({
+              hv_session_id: hvSessionId,
+              tenant_id,
+              trust_score: trustScoreResult.trust_score,
+              is_human: trustScoreResult.is_human,
+              confidence_level: trustScoreResult.confidence_level,
+              breakdown: {
+                facial: bd.facial_confidence,
+                vocal: bd.cognitive_score,
+                reflex: bd.cognitive_score,
+                behavioral: bd.behavioral_bonus,
+                mouse: null,
+              },
+              metadata: {
+                device_type: 'desktop',
+                processing_ms: processingMs,
+                timestamp: new Date().toISOString(),
+                deepface_model: 'ArcFace',
+              },
+            }),
+          }).catch(() => {}); // Silent — never block, never throw
+        });
+      }
     } catch (error) {
       next(error);
     }

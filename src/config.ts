@@ -10,6 +10,9 @@ const envSchema = z.object({
   JWT_EXPIRES_IN: z.coerce.number().int().positive().default(3600),
   PORT: z.coerce.number().int().positive().default(3000),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('production'),
+  HCS_INGEST_URL: z.string().url().optional(),
+  HCS_WORKER_SHARED_SECRET: z.string().min(1).optional(),
+  ALLOWED_ORIGINS: z.string().optional(),
 });
 
 type EnvConfig = z.infer<typeof envSchema>;

@@ -7,6 +7,8 @@ export function apiKeyMiddleware(
   _res: Response,
   next: NextFunction
 ): void {
+  if (req.method === 'OPTIONS') return next();
+
   const apiKey = req.headers['x-api-key'];
 
   if (!apiKey) {

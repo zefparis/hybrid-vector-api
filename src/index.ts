@@ -1,4 +1,4 @@
-import express, { Express } from 'express';
+import express, { Express, Request, Response, NextFunction } from 'express';
 import { config } from './config';
 import { apiKeyMiddleware } from './middleware/apiKey';
 import { errorHandler } from './middleware/errorHandler';
@@ -7,6 +7,52 @@ import sessionRouter from './routes/session';
 import enrollRouter from './routes/enroll';
 
 const app: Express = express();
+
+// ─── CORS ────────────────────────────────────────────────────────────────────
+
+const VERCEL_APP_REGEX = /^https:\/\/[^.]+\.vercel\.app$/;
+
+const STATIC_ALLOWED_ORIGINS: readonly string[] = [
+  'https://hybrid-vector-frontend.vercel.app',
+];
+
+function buildAllowedOrigins(): Set<string> {
+  const set = new Set<string>(STATIC_ALLOWED_ORIGINS);
+  if (config.ALLOWED_ORIGINS) {
+    config.ALLOWED_ORIGINS.split(',').forEach(o => {
+      const trimmed = o.trim();
+      if (trimmed) set.add(trimmed);
+    });
+  }
+  return set;
+}
+
+function isOriginAllowed(origin: string): boolean {
+  if (VERCEL_APP_REGEX.test(origin)) return true;
+  return buildAllowedOrigins().has(origin);
+}
+
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const origin = req.headers.origin;
+
+  if (origin && isOriginAllowed(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  }
+
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,X-API-Key,Authorization');
+  res.setHeader('Access-Control-Max-Age', '86400');
+
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(204);
+    return;
+  }
+
+  next();
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 app.use(express.json({ limit: '10mb' }));
 
