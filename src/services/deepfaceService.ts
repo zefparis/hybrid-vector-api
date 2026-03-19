@@ -2,13 +2,52 @@ import axios, { AxiosError } from 'axios';
 import { config } from '../config';
 import { DeepfaceAnalyzeResponse } from '../types';
 
-const TIMEOUT_MS = 30000;
+const ANALYZE_FIRST_TIMEOUT_MS = 8000;
+const ANALYZE_RETRY_TIMEOUT_MS = 25000;
+const VERIFY_TIMEOUT_MS = 30000;
 
 interface DeepfaceApiResponse {
   face_detected: boolean;
   liveness?: boolean;
   confidence?: number;
   embedding?: number[];
+}
+
+function isTimeoutError(error: unknown): boolean {
+  const axiosError = error as AxiosError;
+  return axiosError.code === 'ECONNABORTED' || axiosError.code === 'ETIMEDOUT';
+}
+
+async function analyzeDeepfaceOnce(
+  imageB64: string,
+  extractEmbedding: boolean,
+  timeoutMs: number,
+  t0: number
+): Promise<DeepfaceApiResponse> {
+  const response = await axios.post<DeepfaceApiResponse>(
+    `${config.DEEPFACE_API_URL}/analyze`,
+    {
+      image_b64: imageB64,
+      extract_embedding: extractEmbedding,
+    },
+    {
+      headers: {
+        'X-API-Key': config.DEEPFACE_API_KEY,
+        'Content-Type': 'application/json',
+      },
+      timeout: timeoutMs,
+    }
+  );
+
+  console.log(`[DEEPFACE] fetch done: ${Date.now() - t0}ms`);
+  console.log('[DEEPFACE] status:', response.status);
+
+  const data = response.data;
+  console.log(`[DEEPFACE] parsed: ${Date.now() - t0}ms`);
+  console.log('[DEEPFACE] face_detected:', data.face_detected);
+  console.log('[DEEPFACE] liveness:', data.liveness);
+
+  return data;
 }
 
 export async function analyzeface(
@@ -22,28 +61,12 @@ export async function analyzeface(
 
   try {
     console.log('[DEEPFACE] fetch start');
-    const response = await axios.post<DeepfaceApiResponse>(
-      `${config.DEEPFACE_API_URL}/analyze`,
-      {
-        image_b64: imageB64,
-        extract_embedding: extractEmbedding,
-      },
-      {
-        headers: {
-          'X-API-Key': config.DEEPFACE_API_KEY,
-          'Content-Type': 'application/json',
-        },
-        timeout: TIMEOUT_MS,
-      }
+    const data = await analyzeDeepfaceOnce(
+      imageB64,
+      extractEmbedding,
+      ANALYZE_FIRST_TIMEOUT_MS,
+      t0
     );
-
-    console.log(`[DEEPFACE] fetch done: ${Date.now() - t0}ms`);
-    console.log('[DEEPFACE] status:', response.status);
-
-    const data = response.data;
-    console.log(`[DEEPFACE] parsed: ${Date.now() - t0}ms`);
-    console.log('[DEEPFACE] face_detected:', data.face_detected);
-    console.log('[DEEPFACE] liveness:', data.liveness);
 
     return {
       face_detected: data.face_detected ?? false,
@@ -52,19 +75,38 @@ export async function analyzeface(
       embedding: data.embedding,
     };
   } catch (error) {
-    const axiosError = error as AxiosError;
-    
-    if (axiosError.code === 'ECONNABORTED' || axiosError.code === 'ETIMEDOUT') {
-      console.error('deepface error:', error);
-      console.error('deepface timeout — code:', axiosError.code);
-      return {
-        face_detected: false,
-        liveness: false,
-        confidence: 0,
-        error: 'DEEPFACE_UNAVAILABLE',
-      };
+    if (isTimeoutError(error)) {
+      console.log('[DEEPFACE] cold start detected, retrying...');
+
+      try {
+        console.log('[DEEPFACE] fetch start');
+        const data = await analyzeDeepfaceOnce(
+          imageB64,
+          extractEmbedding,
+          ANALYZE_RETRY_TIMEOUT_MS,
+          t0
+        );
+
+        return {
+          face_detected: data.face_detected ?? false,
+          liveness: data.liveness ?? false,
+          confidence: data.confidence ?? 0,
+          embedding: data.embedding,
+        };
+      } catch (retryError) {
+        const axiosRetryError = retryError as AxiosError;
+        console.error('deepface error:', retryError);
+        console.error('deepface timeout — code:', axiosRetryError.code);
+        return {
+          face_detected: false,
+          liveness: false,
+          confidence: 0,
+          error: 'DEEPFACE_UNAVAILABLE',
+        };
+      }
     }
 
+    const axiosError = error as AxiosError;
     console.error('deepface error:', error);
     console.error('deepface error detail — status:', axiosError.response?.status, 'body:', JSON.stringify(axiosError.response?.data));
     return {
@@ -92,7 +134,7 @@ export async function verifyFaces(
           'X-API-Key': config.DEEPFACE_API_KEY,
           'Content-Type': 'application/json',
         },
-        timeout: TIMEOUT_MS,
+        timeout: VERIFY_TIMEOUT_MS,
       }
     );
 

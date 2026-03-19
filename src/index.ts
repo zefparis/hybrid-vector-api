@@ -78,7 +78,7 @@ app.listen(PORT, () => {
     } catch {}
   }, 30000);
 
-  // Keep deepface-api warm - ping every 10 minutes
+  // Keep deepface-api warm - ping every 2 minutes
   setInterval(async () => {
     try {
       await fetch(`${config.DEEPFACE_API_URL}/health`, {
@@ -88,7 +88,7 @@ app.listen(PORT, () => {
     } catch {
       console.log('deepface-api keep-alive ping failed - cold start expected');
     }
-  }, 10 * 60 * 1000);
+  }, 2 * 60 * 1000);
 });
 
 export default app;

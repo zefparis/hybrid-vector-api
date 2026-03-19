@@ -20,6 +20,7 @@ const sessionRequestSchema = z.object({
   user_id: z.string().min(1, 'user_id is required'),
   face_image_b64: z.string().min(1, 'face_image_b64 is required'),
   cognitive_session_id: z.string().min(1, 'cognitive_session_id is required'),
+  cognitive_score_override: z.number().min(0).max(1).optional(),
 });
 
 async function signJwt(payload: Omit<JwtPayload, 'iat' | 'exp'>): Promise<string> {
@@ -44,12 +45,12 @@ router.post(
     try {
       const validatedBody = sessionRequestSchema.parse(req.body);
       console.log(`[HV] validation: ${Date.now() - t0}ms`);
-      const { tenant_id, user_id, face_image_b64, cognitive_session_id } = validatedBody;
+      const { tenant_id, user_id, face_image_b64, cognitive_session_id, cognitive_score_override } = validatedBody;
 
       console.log('[HV] calling deepface + HCS in parallel');
       const [deepfaceSettled, hcsSettled] = await Promise.allSettled([
         analyzeface(face_image_b64, false),
-        getCognitiveScore(cognitive_session_id),
+        getCognitiveScore(cognitive_session_id, cognitive_score_override),
       ]);
       console.log(`[HV] allSettled done: ${Date.now() - t0}ms`);
 

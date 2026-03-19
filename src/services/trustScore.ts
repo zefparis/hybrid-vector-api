@@ -40,6 +40,21 @@ export function computeTrustScore(
 
   let reason: TrustScoreReason = null;
 
+  if (deepfaceResult.error === 'DEEPFACE_UNAVAILABLE') {
+    const cognitiveScore = hcsResult.score;
+    const trustScore = Math.round(cognitiveScore * 60);
+
+    breakdown.cognitive_score = cognitiveScore;
+
+    return {
+      trust_score: trustScore,
+      is_human: cognitiveScore > 0.5,
+      confidence_level: getConfidenceLevel(trustScore),
+      breakdown,
+      reason: 'FACIAL_UNAVAILABLE',
+    };
+  }
+
   if (!deepfaceResult.face_detected) {
     return {
       trust_score: 0,

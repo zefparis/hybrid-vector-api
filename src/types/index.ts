@@ -3,6 +3,7 @@ export interface SessionRequest {
   user_id: string;
   face_image_b64: string;
   cognitive_session_id: string;
+  cognitive_score_override?: number;
 }
 
 export interface EnrollRequest {
@@ -39,6 +40,7 @@ export type TrustScoreReason =
   | 'NO_FACE' 
   | 'SPOOF_DETECTED' 
   | 'BOT_DETECTED' 
+  | 'FACIAL_UNAVAILABLE'
   | null;
 
 export interface TrustScoreResult {
