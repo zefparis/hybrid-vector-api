@@ -15,6 +15,9 @@ export async function analyzeface(
   imageB64: string,
   extractEmbedding: boolean = false
 ): Promise<DeepfaceAnalyzeResponse> {
+  console.log('face_b64 length:', imageB64?.length ?? 0);
+  console.log('face_b64 prefix (first 50):', imageB64?.slice(0, 50) ?? '');
+
   try {
     const response = await axios.post<DeepfaceApiResponse>(
       `${config.DEEPFACE_API_URL}/analyze`,
@@ -32,6 +35,7 @@ export async function analyzeface(
     );
 
     const data = response.data;
+    console.log('deepface response:', JSON.stringify(data));
 
     return {
       face_detected: data.face_detected ?? false,
@@ -43,7 +47,8 @@ export async function analyzeface(
     const axiosError = error as AxiosError;
     
     if (axiosError.code === 'ECONNABORTED' || axiosError.code === 'ETIMEDOUT') {
-      console.error('DeepFace API timeout');
+      console.error('deepface error:', error);
+      console.error('deepface timeout — code:', axiosError.code);
       return {
         face_detected: false,
         liveness: false,
@@ -52,7 +57,8 @@ export async function analyzeface(
       };
     }
 
-    console.error('DeepFace API error:', axiosError.message);
+    console.error('deepface error:', error);
+    console.error('deepface error detail — status:', axiosError.response?.status, 'body:', JSON.stringify(axiosError.response?.data));
     return {
       face_detected: false,
       liveness: false,
