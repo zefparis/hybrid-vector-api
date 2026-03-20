@@ -17,6 +17,8 @@ const STATIC_ALLOWED_ORIGINS: readonly string[] = [
   'https://hybrid-vector-frontend.vercel.app',
   'https://hybrid-vector.com',
   'https://www.hybrid-vector.com',
+  'http://localhost:5173',
+  'http://localhost:3000',
 ];
 
 function buildAllowedOrigins(): Set<string> {
