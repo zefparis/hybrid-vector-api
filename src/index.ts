@@ -15,6 +15,8 @@ const VERCEL_APP_REGEX = /^https:\/\/[^.]+\.vercel\.app$/;
 
 const STATIC_ALLOWED_ORIGINS: readonly string[] = [
   'https://hybrid-vector-frontend.vercel.app',
+  'https://hybrid-vector.com',
+  'https://www.hybrid-vector.com',
 ];
 
 function buildAllowedOrigins(): Set<string> {
