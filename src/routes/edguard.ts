@@ -39,6 +39,7 @@ const enrollSchema = z.object({
   institution_id: z.string().min(1, 'institution_id is required'),
   official_photo_b64: z.string().min(1, 'official_photo_b64 is required'),
   selfie_b64: z.string().min(1, 'selfie_b64 is required'),
+  cognitive_score_override: z.number().min(0).max(1).optional(),
   cognitive_baseline: z
     .object({
       stroop_score: z.number().min(0).max(1),
@@ -256,8 +257,15 @@ router.post(
         institution_id,
         official_photo_b64,
         selfie_b64,
-        cognitive_baseline,
+        cognitive_score_override,
+        cognitive_baseline: rawBaseline,
       } = validatedBody;
+
+      // If frontend sends cognitive_score_override, convert to cognitive_baseline format
+      const cognitive_baseline: CognitiveBaseline | undefined =
+        rawBaseline ?? (typeof cognitive_score_override === 'number'
+          ? { stroop_score: cognitive_score_override, reaction_time_ms: 500, nback_score: cognitive_score_override }
+          : undefined);
 
       const [verificationSettled, embeddingSettled] = await Promise.allSettled([
         verifyFaces(official_photo_b64, selfie_b64),
