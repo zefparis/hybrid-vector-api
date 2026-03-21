@@ -15,12 +15,19 @@ type AlertLevel = 'CLEAR' | 'WARNING' | 'ALERT';
 
 interface EdguardEnrollmentRow {
   id: string;
+  tenant_id: string;
   student_id: string;
   institution_id: string;
   embedding: string | number[];
   cognitive_baseline: CognitiveBaseline | null;
   enrolled_at: string;
   verified_count: number;
+}
+
+const DEFAULT_TENANT_ID = 'demo-tenant';
+
+function getTenantId(req: Request): string {
+  return req.tenant_id ?? DEFAULT_TENANT_ID;
 }
 
 interface VerificationResult {
@@ -174,11 +181,12 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return dot / Math.sqrt(magA * magB);
 }
 
-async function fetchEnrollment(studentId: string): Promise<EdguardEnrollmentRow | null> {
+async function fetchEnrollment(tenantId: string, studentId: string): Promise<EdguardEnrollmentRow | null> {
   const client = getSupabaseClient();
   const { data, error } = await client
     .from('edguard_enrollments')
     .select('*')
+    .eq('tenant_id', tenantId)
     .eq('student_id', studentId)
     .maybeSingle();
 
@@ -189,11 +197,12 @@ async function fetchEnrollment(studentId: string): Promise<EdguardEnrollmentRow 
   return (data as EdguardEnrollmentRow | null) ?? null;
 }
 
-async function incrementVerifiedCount(studentId: string, currentCount: number): Promise<void> {
+async function incrementVerifiedCount(tenantId: string, studentId: string, currentCount: number): Promise<void> {
   const client = getSupabaseClient();
   const { error } = await client
     .from('edguard_enrollments')
     .update({ verified_count: currentCount + 1 })
+    .eq('tenant_id', tenantId)
     .eq('student_id', studentId);
 
   if (error) {
@@ -201,8 +210,8 @@ async function incrementVerifiedCount(studentId: string, currentCount: number): 
   }
 }
 
-async function verifyEnrollmentFace(studentId: string, faceB64: string): Promise<VerificationResult> {
-  const enrollment = await fetchEnrollment(studentId);
+async function verifyEnrollmentFace(tenantId: string, studentId: string, faceB64: string): Promise<VerificationResult> {
+  const enrollment = await fetchEnrollment(tenantId, studentId);
 
   if (!enrollment) {
     throw new AppError(404, 'STUDENT_NOT_ENROLLED', 'Student is not enrolled');
@@ -238,7 +247,7 @@ async function verifyEnrollmentFace(studentId: string, faceB64: string): Promise
   const identityConfidence = similarity;
 
   if (verified) {
-    await incrementVerifiedCount(studentId, enrollment.verified_count ?? 0);
+    await incrementVerifiedCount(tenantId, studentId, enrollment.verified_count ?? 0);
   }
 
   return {
@@ -255,6 +264,7 @@ router.post(
   '/enroll',
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      const tenant_id = getTenantId(req);
       const validatedBody = enrollSchema.parse(req.body);
       const {
         student_id,
@@ -300,10 +310,11 @@ router.post(
       const identityConfidence = embeddingResult.confidence ?? 0;
 
       const client = getSupabaseClient();
-      const existingEnrollment = await fetchEnrollment(student_id);
+      const existingEnrollment = await fetchEnrollment(tenant_id, student_id);
       const enrolledAt = new Date().toISOString();
       const enrollmentRow: EdguardEnrollmentRow = {
         id: existingEnrollment?.id ?? randomUUID(),
+        tenant_id,
         student_id,
         institution_id,
         embedding: JSON.stringify(embedding),
@@ -314,7 +325,7 @@ router.post(
 
       const { error } = await client
         .from('edguard_enrollments')
-        .upsert(enrollmentRow, { onConflict: 'student_id' });
+        .upsert(enrollmentRow, { onConflict: 'tenant_id,student_id' });
 
       if (error) {
         throw new AppError(500, 'SUPABASE_UPSERT_FAILED', error.message);
@@ -339,10 +350,11 @@ router.post(
   '/verify',
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      const tenant_id = getTenantId(req);
       const validatedBody = verifySchema.parse(req.body);
       const { student_id, selfie_b64 } = validatedBody;
 
-      const verification = await verifyEnrollmentFace(student_id, selfie_b64);
+      const verification = await verifyEnrollmentFace(tenant_id, student_id, selfie_b64);
 
       res.json({
         success: true,
@@ -364,11 +376,12 @@ router.post(
   '/session/checkpoint',
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      const tenant_id = getTenantId(req);
       const validatedBody = checkpointSchema.parse(req.body);
       const { student_id, checkpoint_number, face_b64, cognitive_score, session_id } =
         validatedBody;
 
-      const verification = await verifyEnrollmentFace(student_id, face_b64);
+      const verification = await verifyEnrollmentFace(tenant_id, student_id, face_b64);
       const baseline = parseCognitiveBaseline(verification.enrollment.cognitive_baseline);
       const cognitiveDeviation =
         typeof cognitive_score === 'number' && baseline
@@ -423,6 +436,7 @@ router.post(
           .from('edguard_checkpoints')
           .insert({
             id: randomUUID(),
+            tenant_id,
             student_id,
             session_id,
             checkpoint_number,
