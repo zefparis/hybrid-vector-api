@@ -1,9 +1,9 @@
 import { randomUUID } from 'crypto';
 import { NextFunction, Request, Response, Router } from 'express';
 import { z } from 'zod';
-import { analyzeface } from '../services/deepfaceService';
+import { enrollFace, verifyFace } from '../services/rekognitionService';
 import { supabase } from '../services/supabaseService';
-import { AppError, DeepfaceAnalyzeResponse } from '../types';
+import { AppError } from '../types';
 
 type CognitiveBaseline = {
   stroop_score: number;
@@ -22,7 +22,8 @@ interface EdguardEnrollmentRow {
   last_name: string | null;
   email: string | null;
   role: string;
-  embedding: string | number[];
+  embedding: string | number[] | null;
+  rekognition_face_id: string | null;
   cognitive_baseline: CognitiveBaseline | null;
   enrolled_at: string;
   verified_count: number;
@@ -43,8 +44,8 @@ interface VerificationResult {
   identity_confidence: number;
 }
 
-const VERIFY_SIMILARITY_THRESHOLD = 0.4;
-const SESSION_SIMILARITY_THRESHOLD = 0.55;
+const VERIFY_SIMILARITY_THRESHOLD = 80;
+const SESSION_SIMILARITY_THRESHOLD = 80;
 
 const enrollSchema = z.object({
   student_id: z.string().min(1, 'student_id is required'),
@@ -144,57 +145,6 @@ function parseCognitiveBaseline(value: unknown): CognitiveBaseline | null {
   return null;
 }
 
-function parseEmbedding(value: unknown): number[] | null {
-  if (Array.isArray(value) && value.length > 0) {
-    // Coerce string numbers to actual numbers (e.g., ["0.123", ...] → [0.123, ...])
-    const coerced = value.map(Number);
-    if (coerced.every((n) => !isNaN(n))) {
-      return coerced;
-    }
-  }
-
-  if (typeof value === 'string') {
-    try {
-      const parsed: unknown = JSON.parse(value);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        const coerced = parsed.map(Number);
-        if (coerced.every((n) => !isNaN(n))) {
-          return coerced;
-        }
-      }
-    } catch {
-      return null;
-    }
-  }
-
-  return null;
-}
-
-function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length === 0 || b.length === 0) {
-    return 0;
-  }
-
-  const length = Math.min(a.length, b.length);
-  let dot = 0;
-  let magA = 0;
-  let magB = 0;
-
-  for (let index = 0; index < length; index += 1) {
-    const aValue = a[index];
-    const bValue = b[index];
-    dot += aValue * bValue;
-    magA += aValue * aValue;
-    magB += bValue * bValue;
-  }
-
-  if (magA === 0 || magB === 0) {
-    return 0;
-  }
-
-  return dot / Math.sqrt(magA * magB);
-}
-
 async function fetchEnrollment(tenantId: string, studentId: string): Promise<EdguardEnrollmentRow | null> {
   const client = getSupabaseClient();
   const { data, error } = await client
@@ -261,41 +211,21 @@ async function verifyEnrollmentFace(
     throw new AppError(404, 'STUDENT_NOT_ENROLLED', 'Student is not enrolled');
   }
 
-  const storedEmbedding = parseEmbedding(enrollment.embedding);
-  if (!storedEmbedding) {
-    throw new AppError(500, 'STORED_EMBEDDING_INVALID', 'Stored embedding is invalid');
+  if (!enrollment.rekognition_face_id) {
+    throw new AppError(500, 'STORED_FACE_ID_MISSING', 'Stored Rekognition face id is missing');
   }
 
-  // Analyze the live face via deepface-api
-  let liveResult: DeepfaceAnalyzeResponse;
-  try {
-    liveResult = await analyzeface(faceB64, true);
-  } catch {
-    liveResult = {
-      face_detected: false,
-      liveness: false,
-      confidence: 0,
-      embedding: undefined,
-    };
-  }
+  const liveResult = await verifyFace(faceB64, enrollment.rekognition_face_id);
+  const similarity = liveResult.similarity;
+  const verified = liveResult.matched;
 
-  const liveEmbedding = parseEmbedding(liveResult.embedding);
-  console.log('[EDGUARD-VERIFY] live embedding dims:', liveEmbedding ? liveEmbedding.length : 0);
-  console.log('[EDGUARD-VERIFY] stored embedding dims:', storedEmbedding.length);
-
-  let similarity = 0;
-  if (liveEmbedding) {
-    similarity = cosineSimilarity(storedEmbedding, liveEmbedding);
-  }
-
-  console.log('[EDGUARD-VERIFY] cosine similarity:', similarity);
+  console.log('[EDGUARD-VERIFY] rekognition faceId:', liveResult.faceId);
+  console.log('[EDGUARD-VERIFY] rekognition similarity:', similarity);
   console.log('[EDGUARD-VERIFY] threshold:', threshold);
-
-  const verified = similarity >= threshold;
   console.log('[EDGUARD-VERIFY] verified:', verified);
-  const liveness = liveResult.liveness ?? false;
-  const livenessScore = liveResult.confidence ?? 0;
-  const identityConfidence = similarity;
+  const liveness = verified;
+  const livenessScore = similarity / 100;
+  const identityConfidence = similarity / 100;
 
   if (verified) {
     await incrementVerifiedCount(tenantId, studentId, enrollment.verified_count ?? 0);
@@ -335,41 +265,15 @@ router.post(
           ? { stroop_score: cognitive_score_override, reaction_time_ms: 500, nback_score: cognitive_score_override }
           : undefined);
 
-      // Extract ArcFace 512d embedding from selfie via deepface-api
-      console.log('[EDGUARD-ENROLL] starting analyzeface (extract embedding)...');
-      let embeddingResult: DeepfaceAnalyzeResponse;
-      try {
-        embeddingResult = await analyzeface(selfie_b64, true);
-      } catch {
-        embeddingResult = {
-          face_detected: false,
-          liveness: false,
-          confidence: 0,
-          embedding: undefined,
-          error: 'DEEPFACE_UNAVAILABLE',
-        };
-      }
-      console.log('[EDGUARD-ENROLL] analyzeface done:', JSON.stringify({
-        face_detected: embeddingResult.face_detected,
-        liveness: embeddingResult.liveness,
-        has_embedding: Array.isArray(embeddingResult.embedding),
-        embedding_dims: Array.isArray(embeddingResult.embedding) ? embeddingResult.embedding.length : 0,
-      }));
-
-      console.log('[EDGUARD-ENROLL] embedding raw:',
-        typeof embeddingResult.embedding,
-        Array.isArray(embeddingResult.embedding),
-        Array.isArray(embeddingResult.embedding) ? embeddingResult.embedding.length : 'NOT_ARRAY',
-        embeddingResult.error ?? 'no_error'
-      );
-      const embedding = parseEmbedding(embeddingResult.embedding);
-      if (!embedding) {
-        console.log('[EDGUARD-ENROLL] early return: embedding is null/invalid after parseEmbedding — raw type:', typeof embeddingResult.embedding, 'isArray:', Array.isArray(embeddingResult.embedding), 'error:', embeddingResult.error);
-        sendApiError(res, 422, 'EMBEDDING_FAILED', 'Failed to extract face embedding');
+      console.log('[EDGUARD-ENROLL] starting Rekognition enrollment...');
+      const enrollmentFace = await enrollFace(selfie_b64, student_id);
+      if (!enrollmentFace) {
+        console.log('[EDGUARD-ENROLL] Rekognition enrollment failed');
+        sendApiError(res, 422, 'REKOGNITION_ENROLL_FAILED', 'Failed to index face in Rekognition');
         return;
       }
 
-      const identityConfidence = embeddingResult.confidence ?? 0;
+      const identityConfidence = enrollmentFace.confidence / 100;
 
       console.log('[EDGUARD-ENROLL] body received:', JSON.stringify({
         student_id,
@@ -394,11 +298,16 @@ router.post(
         last_name: last_name ?? existingEnrollment?.last_name ?? null,
         email: email ?? existingEnrollment?.email ?? null,
         role: role ?? existingEnrollment?.role ?? 'student',
-        embedding: JSON.stringify(embedding),
+        embedding: null,
+        rekognition_face_id: enrollmentFace.faceId,
         cognitive_baseline: cognitive_baseline ?? existingEnrollment?.cognitive_baseline ?? null,
         enrolled_at: enrolledAt,
         verified_count: existingEnrollment?.verified_count ?? 0,
       };
+
+      // Supabase migration required:
+      // ALTER TABLE edguard_enrollments
+      // ADD COLUMN IF NOT EXISTS rekognition_face_id TEXT;
 
       console.log('[EDGUARD-ENROLL] attempting Supabase upsert...');
       try {
@@ -426,7 +335,7 @@ router.post(
         institution_id,
         enrolled: true,
         identity_confidence: identityConfidence,
-        embedding_dims: embedding.length,
+        embedding_dims: 0,
         enrolled_at: enrolledAt,
       });
     } catch (error) {
@@ -476,7 +385,7 @@ router.post(
 
       res.json({
         verified: verification.verified,
-        similarity: verification.similarity,
+        similarity: verification.similarity / 100,
         student_id: verification.enrollment.student_id,
         first_name: verification.enrollment.first_name ?? '',
       });
@@ -503,7 +412,7 @@ router.post(
           : 0;
       const cognitiveAlert = cognitiveDeviation > 0.35;
 
-      const facialMatch = verification.similarity >= SESSION_SIMILARITY_THRESHOLD ? 1 : 0;
+      const facialMatch = verification.similarity >= (SESSION_SIMILARITY_THRESHOLD * 100) ? 1 : 0;
       const livenessOk = verification.liveness ? 1 : 0;
       const cognitiveOk = cognitiveAlert ? 0 : 1;
       const trustScore = (facialMatch * 0.5 + livenessOk * 0.3 + cognitiveOk * 0.2) * 100;

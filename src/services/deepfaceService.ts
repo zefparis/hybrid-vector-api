@@ -7,6 +7,10 @@ const ANALYZE_FIRST_TIMEOUT_MS = 8000;
 const ANALYZE_RETRY_TIMEOUT_MS = 25000;
 const VERIFY_TIMEOUT_MS = 30000;
 
+function isDeepfaceConfigured(): boolean {
+  return Boolean(config.DEEPFACE_API_URL && config.DEEPFACE_API_KEY);
+}
+
 interface DeepfaceApiResponse {
   face_detected: boolean;
   liveness?: boolean;
@@ -98,6 +102,16 @@ export async function analyzeface(
   imageB64: string,
   extractEmbedding: boolean = false
 ): Promise<DeepfaceAnalyzeResponse> {
+  if (!isDeepfaceConfigured()) {
+    console.warn('[DEEPFACE] DeepFace is not configured; returning unavailable response');
+    return {
+      face_detected: false,
+      liveness: false,
+      confidence: 0,
+      error: 'DEEPFACE_UNAVAILABLE',
+    };
+  }
+
   const t0 = Date.now();
   const url = `${config.DEEPFACE_API_URL}/analyze`;
   console.log('[DEEPFACE] calling:', url);
@@ -205,6 +219,11 @@ export async function verifyFaces(
   image1B64: string,
   image2B64: string
 ): Promise<{ verified: boolean; confidence: number; error?: string }> {
+  if (!isDeepfaceConfigured()) {
+    console.warn('[DEEPFACE-VERIFY] DeepFace is not configured; returning unavailable response');
+    return { verified: false, confidence: 0, error: 'DEEPFACE_UNAVAILABLE' };
+  }
+
   const t0 = Date.now();
   const raw1 = image1B64.replace(/^data:image\/\w+;base64,/, '');
   const raw2 = image2B64.replace(/^data:image\/\w+;base64,/, '');

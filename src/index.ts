@@ -76,25 +76,29 @@ app.listen(PORT, () => {
   console.log(`🚀 hv-api running on port ${PORT}`);
   console.log(`📍 Environment: ${config.NODE_ENV}`);
 
-  // Pre-warm deepface-api 30s after startup
-  setTimeout(async () => {
-    try {
-      await fetch(`${config.DEEPFACE_API_URL}/health`);
-      console.log('deepface-api pre-warmed on startup');
-    } catch {}
-  }, 30000);
+  if (config.DEEPFACE_API_URL) {
+    // Pre-warm deepface-api 30s after startup
+    setTimeout(async () => {
+      try {
+        await fetch(`${config.DEEPFACE_API_URL}/health`);
+        console.log('deepface-api pre-warmed on startup');
+      } catch {}
+    }, 30000);
 
-  // Keep deepface-api warm - ping every 2 minutes
-  setInterval(async () => {
-    try {
-      await fetch(`${config.DEEPFACE_API_URL}/health`, {
-        signal: AbortSignal.timeout(5000),
-      });
-      console.log('deepface-api keep-alive ping OK');
-    } catch {
-      console.log('deepface-api keep-alive ping failed - cold start expected');
-    }
-  }, 2 * 60 * 1000);
+    // Keep deepface-api warm - ping every 2 minutes
+    setInterval(async () => {
+      try {
+        await fetch(`${config.DEEPFACE_API_URL}/health`, {
+          signal: AbortSignal.timeout(5000),
+        });
+        console.log('deepface-api keep-alive ping OK');
+      } catch {
+        console.log('deepface-api keep-alive ping failed - cold start expected');
+      }
+    }, 2 * 60 * 1000);
+  } else {
+    console.log('deepface-api warmup disabled');
+  }
 });
 
 export default app;
