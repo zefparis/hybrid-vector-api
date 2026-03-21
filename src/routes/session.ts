@@ -6,6 +6,7 @@ import { config } from '../config';
 import { analyzeface } from '../services/deepfaceService';
 import { getCognitiveScore } from '../services/hcsService';
 import { computeTrustScore } from '../services/trustScore';
+import { supabase } from '../services/supabaseService';
 import {
   SessionResponse,
   JwtPayload,
@@ -116,6 +117,31 @@ router.post(
 
       res.json(response);
       console.log(`[HV] response sent: ${Date.now() - t0}ms TOTAL`);
+
+      // Fire-and-forget: persist session to Supabase
+      if (supabase) {
+        const bd = trustScoreResult.breakdown;
+        supabase
+          .from('hv_sessions')
+          .insert({
+            id: randomUUID(),
+            tenant_id,
+            user_id,
+            trust_score: trustScoreResult.trust_score,
+            is_human: trustScoreResult.is_human,
+            confidence_level: trustScoreResult.confidence_level,
+            facial_liveness: bd.facial_liveness,
+            facial_confidence: bd.facial_confidence,
+            cognitive_score: bd.cognitive_score,
+            behavioral_bonus: bd.behavioral_bonus,
+            reason: trustScoreResult.reason,
+            created_at: new Date().toISOString(),
+          })
+          .then(
+            ({ error }) => { if (error) console.error('[HV] hv_sessions insert failed:', error.message); },
+            () => {}
+          );
+      }
 
       // Fire-and-forget: push session to HCS-U7 backend (never blocks, never throws)
       if (config.HCS_INGEST_URL && config.HCS_WORKER_SHARED_SECRET) {

@@ -411,19 +411,44 @@ router.post(
         flags.push('COGNITIVE_DEVIATION');
       }
 
+      const roundedTrustScore = Math.round(trustScore);
+      const isHuman = roundedTrustScore >= 65;
+      const now = new Date().toISOString();
+
       res.json({
         success: true,
         session_id,
         student_id,
         checkpoint_number,
-        trust_score: Math.round(trustScore),
+        trust_score: roundedTrustScore,
         alert_level: alertLevel,
         verified: verification.verified,
         liveness: verification.liveness,
         cognitive_deviation: cognitiveDeviation,
         flags,
-        timestamp: new Date().toISOString(),
+        timestamp: now,
       });
+
+      // Fire-and-forget: persist checkpoint to Supabase
+      if (supabase) {
+        supabase
+          .from('edguard_checkpoints')
+          .insert({
+            id: randomUUID(),
+            student_id,
+            session_id,
+            checkpoint_number,
+            trust_score: roundedTrustScore,
+            is_human: isHuman,
+            alert_level: alertLevel,
+            flags,
+            created_at: now,
+          })
+          .then(
+            ({ error: insertErr }) => { if (insertErr) console.error('[EDGUARD] checkpoint insert failed:', insertErr.message); },
+            () => {}
+          );
+      }
     } catch (error) {
       next(error);
     }

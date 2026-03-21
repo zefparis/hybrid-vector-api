@@ -56,13 +56,15 @@ export function computeTrustScore(
   }
 
   if (!deepfaceResult.face_detected) {
-    breakdown.cognitive_score = hcsResult.score;
+    const cognitiveScore = hcsResult.score;
+    const trustScore = Math.round(cognitiveScore * 60);
+    breakdown.cognitive_score = cognitiveScore;
     return {
-      trust_score: 0,
-      is_human: false,
-      confidence_level: 'LOW',
+      trust_score: trustScore,
+      is_human: trustScore >= 45,
+      confidence_level: getConfidenceLevel(trustScore),
       breakdown,
-      reason: 'NO_FACE',
+      reason: 'NO_FACE_DEGRADED',
     };
   }
 

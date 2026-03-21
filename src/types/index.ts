@@ -38,6 +38,7 @@ export type ConfidenceLevel = 'LOW' | 'MEDIUM' | 'HIGH';
 
 export type TrustScoreReason = 
   | 'NO_FACE' 
+  | 'NO_FACE_DEGRADED'
   | 'SPOOF_DETECTED' 
   | 'BOT_DETECTED' 
   | 'FACIAL_UNAVAILABLE'
