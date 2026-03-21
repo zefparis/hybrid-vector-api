@@ -18,12 +18,10 @@ const client = new RekognitionClient({
   },
 });
 
-function normalizeImageBase64(imageBase64: string): string {
-  return imageBase64.replace(/^data:image\/\w+;base64,/, '').trim();
-}
+export const cleanBase64 = (b64: string): string => b64.replace(/^data:image\/\w+;base64,/, '').trim();
 
 function getImageBytes(imageBase64: string): Buffer {
-  return Buffer.from(normalizeImageBase64(imageBase64), 'base64');
+  return Buffer.from(cleanBase64(imageBase64), 'base64');
 }
 
 export async function ensureCollectionExists(): Promise<void> {
@@ -55,40 +53,34 @@ export async function enrollFace(
   imageBase64: string,
   externalImageId: string,
 ): Promise<{ faceId: string; confidence: number } | null> {
-  try {
-    const response = await client.send(
-      new IndexFacesCommand({
-        CollectionId: COLLECTION_ID,
-        Image: { Bytes: getImageBytes(imageBase64) },
-        ExternalImageId: externalImageId,
-        DetectionAttributes: ['DEFAULT'],
-        MaxFaces: 1,
-        QualityFilter: 'AUTO',
-      })
-    );
+  const response = await client.send(
+    new IndexFacesCommand({
+      CollectionId: COLLECTION_ID,
+      Image: { Bytes: getImageBytes(imageBase64) },
+      ExternalImageId: externalImageId,
+      DetectionAttributes: ['DEFAULT'],
+      MaxFaces: 1,
+      QualityFilter: 'AUTO',
+    })
+  );
 
-    const faceRecord = response.FaceRecords?.[0];
-    const face = faceRecord?.Face as { FaceId?: string; Confidence?: number } | undefined;
-    const faceId = face?.FaceId ?? '';
-    const confidence = face?.Confidence ?? 0;
+  const faceRecord = response.FaceRecords?.[0];
+  const face = faceRecord?.Face as { FaceId?: string; Confidence?: number } | undefined;
+  const faceId = face?.FaceId ?? '';
+  const confidence = face?.Confidence ?? 0;
 
-    if (!faceId) {
-      console.warn('[REKOGNITION-ENROLL] No face id returned by IndexFaces');
-      return null;
-    }
-
-    console.log('[REKOGNITION-ENROLL]', faceId, confidence);
-    return { faceId, confidence };
-  } catch (error) {
-    console.error('[REKOGNITION-ENROLL] failed:', error);
+  if (!faceId) {
+    console.warn('[REKOGNITION-ENROLL] No face id returned by IndexFaces');
     return null;
   }
+
+  console.log('[REKOGNITION-ENROLL]', faceId, confidence);
+  return { faceId, confidence };
 }
 
-export async function verifyFace(
+export async function searchFaceByImage(
   imageBase64: string,
-  expectedFaceId: string
-): Promise<{ matched: boolean; similarity: number; faceId: string }> {
+): Promise<{ faceId: string; similarity: number } | null> {
   const response = await client.send(
     new SearchFacesByImageCommand({
       CollectionId: COLLECTION_ID,
@@ -103,11 +95,31 @@ export async function verifyFace(
   const face = match?.Face as { FaceId?: string } | undefined;
   const faceId = face?.FaceId ?? '';
   const similarity = match?.Similarity ?? 0;
-  const matched = Boolean(match && faceId === expectedFaceId && similarity >= 80);
 
-  console.log('[REKOGNITION-VERIFY]', similarity, matched);
+  if (!match || !faceId) {
+    console.log('[REKOGNITION-SEARCH] no match');
+    return null;
+  }
 
-  return { matched, similarity, faceId };
+  console.log('[REKOGNITION-SEARCH]', faceId, similarity);
+  return { faceId, similarity };
+}
+
+export async function verifyFace(
+  imageBase64: string,
+  expectedFaceId: string
+): Promise<{ matched: boolean; similarity: number; faceId: string }> {
+  const result = await searchFaceByImage(imageBase64);
+
+  if (!result) {
+    return { matched: false, similarity: 0, faceId: '' };
+  }
+
+  const matched = Boolean(result.faceId === expectedFaceId && result.similarity >= 80);
+
+  console.log('[REKOGNITION-VERIFY]', result.similarity, matched);
+
+  return { matched, similarity: result.similarity, faceId: result.faceId };
 }
 
 export async function deleteFace(faceId: string): Promise<boolean> {

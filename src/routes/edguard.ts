@@ -1,7 +1,7 @@
-import { randomUUID } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 import { NextFunction, Request, Response, Router } from 'express';
 import { z } from 'zod';
-import { enrollFace, verifyFace } from '../services/rekognitionService';
+import { cleanBase64, enrollFace, searchFaceByImage, verifyFace } from '../services/rekognitionService';
 import { supabase } from '../services/supabaseService';
 import { AppError } from '../types';
 
@@ -14,19 +14,19 @@ type CognitiveBaseline = {
 type AlertLevel = 'CLEAR' | 'WARNING' | 'ALERT';
 
 interface EdguardEnrollmentRow {
-  id: string;
+  id?: string;
   tenant_id: string;
   student_id: string;
-  institution_id: string;
   first_name: string | null;
   last_name: string | null;
   email: string | null;
-  role: string;
-  embedding: string | number[] | null;
+  institution_id?: string | null;
+  role?: string | null;
+  embedding?: string | number[] | null;
   rekognition_face_id: string | null;
-  cognitive_baseline: CognitiveBaseline | null;
+  cognitive_baseline?: CognitiveBaseline | null;
   enrolled_at: string;
-  verified_count: number;
+  verified_count?: number;
 }
 
 const DEFAULT_TENANT_ID = 'demo-tenant';
@@ -44,31 +44,21 @@ interface VerificationResult {
   identity_confidence: number;
 }
 
-const VERIFY_SIMILARITY_THRESHOLD = 80;
 const SESSION_SIMILARITY_THRESHOLD = 80;
 
 const enrollSchema = z.object({
-  student_id: z.string().min(1, 'student_id is required'),
-  institution_id: z.string().min(1, 'institution_id is required'),
   selfie_b64: z.string().min(1, 'selfie_b64 is required'),
-  first_name: z.string().optional(),
-  last_name: z.string().optional(),
+  first_name: z.string().min(1, 'first_name is required'),
+  last_name: z.string().min(1, 'last_name is required'),
   email: z.string().email().optional(),
-  role: z.enum(['student', 'teacher', 'beneficiary']).optional().default('student'),
-  cognitive_score_override: z.number().min(0).max(1).optional(),
-  cognitive_baseline: z
-    .object({
-      stroop_score: z.number().min(0).max(1),
-      reaction_time_ms: z.number().positive(),
-      nback_score: z.number().min(0).max(1),
-    })
-    .optional(),
+  tenant_id: z.string().min(1, 'tenant_id is required'),
 });
 
 const verifySchema = z.object({
-  student_id: z.string().min(1, 'student_id is required'),
   selfie_b64: z.string().min(1, 'selfie_b64 is required'),
-  include_cognitive: z.boolean().default(false),
+  first_name: z.string().min(1, 'first_name is required'),
+  last_name: z.string().min(1, 'last_name is required'),
+  tenant_id: z.string().min(1, 'tenant_id is required'),
 });
 
 const lookupSchema = z.object({
@@ -86,6 +76,23 @@ const checkpointSchema = z.object({
 });
 
 const router = Router();
+
+const ULID_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+function ulid(): string {
+  let time = Date.now();
+  let encodedTime = '';
+
+  for (let i = 9; i >= 0; i -= 1) {
+    encodedTime = ULID_ALPHABET[time % 32] + encodedTime;
+    time = Math.floor(time / 32);
+  }
+
+  const randomPart = randomBytes(16)
+    .reduce((acc, byte) => acc + ULID_ALPHABET[byte % 32], '');
+
+  return `${encodedTime}${randomPart}`;
+}
 
 function getSupabaseClient() {
   if (!supabase) {
@@ -109,6 +116,33 @@ function sendApiError(
     timestamp: new Date().toISOString(),
     ...extra,
   });
+}
+
+function logEnrollStep(step: string, meta: Record<string, unknown> = {}): void {
+  console.log('[ENROLL] step:', step, meta);
+}
+
+function logVerifyStep(step: string, meta: Record<string, unknown> = {}): void {
+  console.log('[VERIFY] step:', step, meta);
+}
+
+async function fetchEnrollmentByFaceId(
+  tenantId: string,
+  rekognitionFaceId: string,
+): Promise<Pick<EdguardEnrollmentRow, 'student_id' | 'first_name' | 'last_name' | 'rekognition_face_id'> | null> {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('edguard_enrollments')
+    .select('student_id, first_name, last_name, rekognition_face_id')
+    .eq('tenant_id', tenantId)
+    .eq('rekognition_face_id', rekognitionFaceId)
+    .maybeSingle();
+
+  if (error) {
+    throw new AppError(500, 'SUPABASE_QUERY_FAILED', error.message);
+  }
+
+  return (data as Pick<EdguardEnrollmentRow, 'student_id' | 'first_name' | 'last_name' | 'rekognition_face_id'> | null) ?? null;
 }
 
 function isCognitiveBaseline(value: unknown): value is CognitiveBaseline {
@@ -245,98 +279,66 @@ router.post(
   '/enroll',
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const tenant_id = getTenantId(req);
       const validatedBody = enrollSchema.parse(req.body);
       const {
-        student_id,
-        institution_id,
         selfie_b64,
         first_name,
         last_name,
         email,
-        role,
-        cognitive_score_override,
-        cognitive_baseline: rawBaseline,
+        tenant_id,
       } = validatedBody;
 
-      // If frontend sends cognitive_score_override, convert to cognitive_baseline format
-      const cognitive_baseline: CognitiveBaseline | undefined =
-        rawBaseline ?? (typeof cognitive_score_override === 'number'
-          ? { stroop_score: cognitive_score_override, reaction_time_ms: 500, nback_score: cognitive_score_override }
-          : undefined);
+      logEnrollStep('received body', { tenant_id, first_name, last_name, has_email: Boolean(email) });
 
-      console.log('[EDGUARD-ENROLL] starting Rekognition enrollment...');
-      const enrollmentFace = await enrollFace(selfie_b64, student_id);
+      const student_id = ulid();
+      logEnrollStep('generated student_id', { student_id });
+
+      const clean_b64 = cleanBase64(selfie_b64);
+      logEnrollStep('cleaned base64', { length: clean_b64.length });
+
+      const enrollmentFace = await enrollFace(clean_b64, student_id);
+      logEnrollStep('rekognition index complete', {
+        has_face_id: Boolean(enrollmentFace?.faceId),
+        confidence: enrollmentFace?.confidence ?? 0,
+      });
       if (!enrollmentFace) {
-        console.log('[EDGUARD-ENROLL] Rekognition enrollment failed');
-        sendApiError(res, 422, 'REKOGNITION_ENROLL_FAILED', 'Failed to index face in Rekognition');
+        logEnrollStep('no face detected');
+        sendApiError(res, 422, 'FACE_NOT_DETECTED', 'No face detected in the provided image');
         return;
       }
 
-      const identityConfidence = enrollmentFace.confidence / 100;
-
-      console.log('[EDGUARD-ENROLL] body received:', JSON.stringify({
+      logEnrollStep('upserting into supabase');
+      const client = getSupabaseClient();
+      const enrolledAt = new Date().toISOString();
+      const enrollmentRow = {
         student_id,
         first_name,
         last_name,
-        email,
+        email: email ?? null,
         tenant_id,
-      }));
-
-      console.log('[EDGUARD-ENROLL] gate 1: supabase client exists:', !!supabase);
-      const client = getSupabaseClient();
-      console.log('[EDGUARD-ENROLL] gate 2: fetching existing enrollment for', tenant_id, student_id);
-      const existingEnrollment = await fetchEnrollment(tenant_id, student_id);
-      console.log('[EDGUARD-ENROLL] gate 3: existingEnrollment:', existingEnrollment ? 'found (id=' + existingEnrollment.id + ')' : 'null (new enrollment)');
-      const enrolledAt = new Date().toISOString();
-      const enrollmentRow: EdguardEnrollmentRow = {
-        id: existingEnrollment?.id ?? randomUUID(),
-        tenant_id,
-        student_id,
-        institution_id,
-        first_name: first_name ?? existingEnrollment?.first_name ?? null,
-        last_name: last_name ?? existingEnrollment?.last_name ?? null,
-        email: email ?? existingEnrollment?.email ?? null,
-        role: role ?? existingEnrollment?.role ?? 'student',
-        embedding: null,
         rekognition_face_id: enrollmentFace.faceId,
-        cognitive_baseline: cognitive_baseline ?? existingEnrollment?.cognitive_baseline ?? null,
         enrolled_at: enrolledAt,
-        verified_count: existingEnrollment?.verified_count ?? 0,
-      };
+      } satisfies Partial<EdguardEnrollmentRow>;
 
-      // Supabase migration required:
-      // ALTER TABLE edguard_enrollments
-      // ADD COLUMN IF NOT EXISTS rekognition_face_id TEXT;
+      const { error: insertError } = await client
+        .from('edguard_enrollments')
+        .insert(enrollmentRow as Record<string, unknown>);
 
-      console.log('[EDGUARD-ENROLL] attempting Supabase upsert...');
-      try {
-        const { data: supabaseResult, error: upsertError } = await client
-          .from('edguard_enrollments')
-          .upsert(enrollmentRow, { onConflict: 'tenant_id,student_id' })
-          .select();
-
-        console.log('[EDGUARD-ENROLL] upsert error:', upsertError);
-        console.log('[EDGUARD-ENROLL] upsert data:', JSON.stringify(supabaseResult));
-
-        if (upsertError) {
-          console.error('[EDGUARD-ENROLL] Supabase error detail:', upsertError.message, upsertError.code, upsertError.details);
-          throw upsertError;
-        }
-      } catch (err: unknown) {
-        const e = err as Record<string, unknown>;
-        console.error('[EDGUARD-ENROLL] CATCH:', e.message, e.code, e.details);
-        throw new AppError(500, 'SUPABASE_UPSERT_FAILED', String(e.message ?? 'Unknown upsert error'));
+      if (insertError) {
+        console.error('[ENROLL] step:', 'supabase insert failed', insertError.message);
+        throw new AppError(500, 'SUPABASE_INSERT_FAILED', insertError.message);
       }
+
+      logEnrollStep('supabase insert complete', {
+        student_id,
+        face_id: enrollmentFace.faceId,
+        enrolled_at: enrolledAt,
+      });
 
       res.status(201).json({
         success: true,
         student_id,
-        institution_id,
-        enrolled: true,
-        identity_confidence: identityConfidence,
-        embedding_dims: 0,
-        enrolled_at: enrolledAt,
+        confidence: enrollmentFace.confidence,
       });
     } catch (error) {
       next(error);
@@ -374,20 +376,48 @@ router.post(
   '/verify',
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const tenant_id = getTenantId(req);
       const validatedBody = verifySchema.parse(req.body);
-      const { student_id, selfie_b64 } = validatedBody;
-      const threshold = VERIFY_SIMILARITY_THRESHOLD;
+      const { selfie_b64, first_name, last_name, tenant_id } = validatedBody;
 
-      console.log('[EDGUARD-VERIFY] student_id:', student_id);
+      logVerifyStep('received body', { tenant_id, first_name, last_name });
 
-      const verification = await verifyEnrollmentFace(tenant_id, student_id, selfie_b64, threshold);
+      const clean_b64 = cleanBase64(selfie_b64);
+      logVerifyStep('cleaned base64', { length: clean_b64.length });
+
+      const searchResult = await searchFaceByImage(clean_b64);
+      if (!searchResult) {
+        logVerifyStep('no rekognition match');
+        res.json({ verified: false, similarity: 0 });
+        return;
+      }
+
+      logVerifyStep('rekognition match found', {
+        face_id: searchResult.faceId,
+        similarity: searchResult.similarity,
+      });
+
+      const enrollment = await fetchEnrollmentByFaceId(tenant_id, searchResult.faceId);
+      if (!enrollment) {
+        logVerifyStep('supabase enrollment not found for face', {
+          face_id: searchResult.faceId,
+          similarity: searchResult.similarity,
+        });
+        sendApiError(res, 404, 'ENROLLMENT_NOT_FOUND', 'Enrollment not found for matched face');
+        return;
+      }
+
+      logVerifyStep('verification success', {
+        face_id: searchResult.faceId,
+        similarity: searchResult.similarity,
+        student_id: enrollment.student_id,
+        first_name: enrollment.first_name,
+      });
 
       res.json({
-        verified: verification.verified,
-        similarity: verification.similarity / 100,
-        student_id: verification.enrollment.student_id,
-        first_name: verification.enrollment.first_name ?? '',
+        verified: true,
+        similarity: searchResult.similarity,
+        student_id: enrollment.student_id,
+        first_name: enrollment.first_name ?? '',
       });
     } catch (error) {
       next(error);
