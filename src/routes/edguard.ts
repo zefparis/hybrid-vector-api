@@ -43,7 +43,7 @@ interface VerificationResult {
   identity_confidence: number;
 }
 
-const ARCFACE_THRESHOLD = 0.68;
+const SIMILARITY_THRESHOLD = 0.55;
 
 const enrollSchema = z.object({
   student_id: z.string().min(1, 'student_id is required'),
@@ -226,6 +226,7 @@ async function incrementVerifiedCount(tenantId: string, studentId: string, curre
 }
 
 async function verifyEnrollmentFace(tenantId: string, studentId: string, faceB64: string): Promise<VerificationResult> {
+  console.log('[EDGUARD-VERIFY] student_id lookup:', studentId);
   const enrollment = await fetchEnrollment(tenantId, studentId);
 
   if (!enrollment) {
@@ -233,6 +234,7 @@ async function verifyEnrollmentFace(tenantId: string, studentId: string, faceB64
   }
 
   const storedEmbedding = parseEmbedding(enrollment.embedding);
+  console.log('[EDGUARD-VERIFY] embedding found:', !!storedEmbedding);
   if (!storedEmbedding) {
     throw new AppError(500, 'STORED_EMBEDDING_INVALID', 'Stored embedding is invalid');
   }
@@ -256,7 +258,11 @@ async function verifyEnrollmentFace(tenantId: string, studentId: string, faceB64
     similarity = normalizeSimilarity(cosineSimilarity(storedEmbedding, liveEmbedding));
   }
 
-  const verified = similarity >= ARCFACE_THRESHOLD;
+  console.log('[EDGUARD-VERIFY] cosine similarity:', similarity);
+  console.log('[EDGUARD-VERIFY] threshold:', SIMILARITY_THRESHOLD);
+
+  const verified = similarity >= SIMILARITY_THRESHOLD;
+  console.log('[EDGUARD-VERIFY] result:', verified);
   const liveness = liveResult.liveness ?? false;
   const livenessScore = liveResult.confidence ?? 0;
   const identityConfidence = similarity;
@@ -414,7 +420,7 @@ router.post(
         student_id,
         verified: verification.verified,
         similarity: verification.similarity,
-        threshold: ARCFACE_THRESHOLD,
+        threshold: SIMILARITY_THRESHOLD,
         liveness: verification.liveness,
         liveness_score: verification.liveness_score,
         identity_confidence: verification.identity_confidence,
@@ -442,7 +448,7 @@ router.post(
           : 0;
       const cognitiveAlert = cognitiveDeviation > 0.35;
 
-      const facialMatch = verification.similarity >= ARCFACE_THRESHOLD ? 1 : 0;
+      const facialMatch = verification.similarity >= SIMILARITY_THRESHOLD ? 1 : 0;
       const livenessOk = verification.liveness ? 1 : 0;
       const cognitiveOk = cognitiveAlert ? 0 : 1;
       const trustScore = (facialMatch * 0.5 + livenessOk * 0.3 + cognitiveOk * 0.2) * 100;
