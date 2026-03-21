@@ -343,8 +343,11 @@ router.post(
         tenant_id,
       }));
 
+      console.log('[EDGUARD-ENROLL] gate 1: supabase client exists:', !!supabase);
       const client = getSupabaseClient();
+      console.log('[EDGUARD-ENROLL] gate 2: fetching existing enrollment for', tenant_id, student_id);
       const existingEnrollment = await fetchEnrollment(tenant_id, student_id);
+      console.log('[EDGUARD-ENROLL] gate 3: existingEnrollment:', existingEnrollment ? 'found (id=' + existingEnrollment.id + ')' : 'null (new enrollment)');
       const enrolledAt = new Date().toISOString();
       const enrollmentRow: EdguardEnrollmentRow = {
         id: existingEnrollment?.id ?? randomUUID(),
