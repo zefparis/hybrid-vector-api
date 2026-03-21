@@ -315,6 +315,7 @@ router.post(
 
       const embedding = parseEmbedding(embeddingResult.embedding);
       if (!embedding) {
+        console.log('[EDGUARD-ENROLL] early return: embedding is null/invalid after parseEmbedding — raw type:', typeof embeddingResult.embedding, 'isArray:', Array.isArray(embeddingResult.embedding), 'error:', embeddingResult.error);
         sendApiError(res, 422, 'EMBEDDING_FAILED', 'Failed to extract face embedding');
         return;
       }
