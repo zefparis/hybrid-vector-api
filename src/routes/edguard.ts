@@ -312,6 +312,7 @@ router.post(
       const enrolledAt = new Date().toISOString();
       const enrollmentRow = {
         student_id,
+        institution_id: tenant_id,
         first_name,
         last_name,
         email: email ?? null,
@@ -331,6 +332,7 @@ router.post(
 
       logEnrollStep('supabase insert complete', {
         student_id,
+        institution_id: tenant_id,
         face_id: enrollmentFace.faceId,
         enrolled_at: enrolledAt,
       });
