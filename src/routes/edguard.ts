@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { NextFunction, Request, Response, Router } from 'express';
 import { z } from 'zod';
-import { analyzeface, verifyFaces } from '../services/deepfaceService';
+import { analyzeface } from '../services/deepfaceService';
 import { supabase } from '../services/supabaseService';
 import { AppError, DeepfaceAnalyzeResponse } from '../types';
 
@@ -37,7 +37,6 @@ const ARCFACE_THRESHOLD = 0.68;
 const enrollSchema = z.object({
   student_id: z.string().min(1, 'student_id is required'),
   institution_id: z.string().min(1, 'institution_id is required'),
-  official_photo_b64: z.string().min(1, 'official_photo_b64 is required'),
   selfie_b64: z.string().min(1, 'selfie_b64 is required'),
   cognitive_score_override: z.number().min(0).max(1).optional(),
   cognitive_baseline: z
@@ -260,7 +259,6 @@ router.post(
       const {
         student_id,
         institution_id,
-        official_photo_b64,
         selfie_b64,
         cognitive_score_override,
         cognitive_baseline: rawBaseline,
@@ -272,7 +270,7 @@ router.post(
           ? { stroop_score: cognitive_score_override, reaction_time_ms: 500, nback_score: cognitive_score_override }
           : undefined);
 
-      // Sequence calls: analyzeface first (warms up deepface on cold start), then verifyFaces
+      // Extract ArcFace 512d embedding from selfie via deepface-api
       console.log('[EDGUARD-ENROLL] starting analyzeface (extract embedding)...');
       let embeddingResult: DeepfaceAnalyzeResponse;
       try {
@@ -299,22 +297,7 @@ router.post(
         return;
       }
 
-      // Now verify faces (deepface is warm after analyzeface)
-      console.log('[EDGUARD-ENROLL] starting verifyFaces...');
-      let verification: { verified: boolean; confidence: number; error?: string };
-      try {
-        verification = await verifyFaces(official_photo_b64, selfie_b64);
-      } catch {
-        verification = { verified: false, confidence: 0, error: 'DEEPFACE_UNAVAILABLE' };
-      }
-      console.log('[EDGUARD-ENROLL] verifyFaces done:', JSON.stringify(verification));
-
-      if (!verification.verified || verification.confidence < 0.65) {
-        sendApiError(res, 422, 'IDENTITY_MISMATCH', 'Identity verification failed', {
-          confidence: verification.confidence,
-        });
-        return;
-      }
+      const identityConfidence = embeddingResult.confidence ?? 0;
 
       const client = getSupabaseClient();
       const existingEnrollment = await fetchEnrollment(student_id);
@@ -342,7 +325,7 @@ router.post(
         student_id,
         institution_id,
         enrolled: true,
-        identity_confidence: verification.confidence,
+        identity_confidence: identityConfidence,
         embedding_dims: embedding.length,
         enrolled_at: enrolledAt,
       });
