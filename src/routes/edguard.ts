@@ -70,6 +70,12 @@ const verifySchema = z.object({
   include_cognitive: z.boolean().default(false),
 });
 
+const lookupSchema = z.object({
+  first_name: z.string().min(1, 'first_name is required'),
+  last_name: z.string().min(1, 'last_name is required'),
+  tenant_id: z.string().min(1, 'tenant_id is required'),
+});
+
 const checkpointSchema = z.object({
   student_id: z.string().min(1, 'student_id is required'),
   checkpoint_number: z.number().int().positive(),
@@ -203,6 +209,31 @@ async function fetchEnrollment(tenantId: string, studentId: string): Promise<Edg
   }
 
   return (data as EdguardEnrollmentRow | null) ?? null;
+}
+
+async function lookupEnrollmentByName(
+  tenantId: string,
+  firstName: string,
+  lastName: string,
+): Promise<Pick<EdguardEnrollmentRow, 'student_id' | 'first_name' | 'last_name'> | null> {
+  const client = getSupabaseClient();
+  const normalizedFirstName = firstName.trim();
+  const normalizedLastName = lastName.trim();
+
+  const { data, error } = await client
+    .from('edguard_enrollments')
+    .select('student_id, first_name, last_name')
+    .eq('tenant_id', tenantId)
+    .filter('first_name', 'ilike', normalizedFirstName)
+    .filter('last_name', 'ilike', normalizedLastName)
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new AppError(500, 'SUPABASE_QUERY_FAILED', error.message);
+  }
+
+  return (data as Pick<EdguardEnrollmentRow, 'student_id' | 'first_name' | 'last_name'> | null) ?? null;
 }
 
 async function incrementVerifiedCount(tenantId: string, studentId: string, currentCount: number): Promise<void> {
@@ -397,6 +428,32 @@ router.post(
         identity_confidence: identityConfidence,
         embedding_dims: embedding.length,
         enrolled_at: enrolledAt,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.post(
+  '/lookup',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const validatedBody = lookupSchema.parse(req.body);
+      const { first_name, last_name, tenant_id } = validatedBody;
+
+      const result = await lookupEnrollmentByName(tenant_id, first_name, last_name);
+      console.log('[EDGUARD-LOOKUP]', first_name, last_name, result);
+
+      if (!result) {
+        res.json({ found: false });
+        return;
+      }
+
+      res.json({
+        found: true,
+        student_id: result.student_id,
+        first_name: result.first_name ?? first_name,
       });
     } catch (error) {
       next(error);
