@@ -3,7 +3,6 @@ import { z } from 'zod';
 import * as jose from 'jose';
 import { randomUUID } from 'crypto';
 import { config } from '../config';
-import { analyzeface } from '../services/deepfaceService';
 import { getCognitiveScore } from '../services/hcsService';
 import { computeTrustScore } from '../services/trustScore';
 import { supabase } from '../services/supabaseService';
@@ -19,7 +18,9 @@ const router = Router();
 const sessionRequestSchema = z.object({
   tenant_id: z.string().min(1, 'tenant_id is required'),
   user_id: z.string().min(1, 'user_id is required'),
-  face_image_b64: z.string().min(1, 'face_image_b64 is required'),
+  face_detected: z.boolean(),
+  face_confidence: z.number().min(0).max(1),
+  face_descriptor: z.array(z.number()).optional(),
   cognitive_session_id: z.string().min(1, 'cognitive_session_id is required'),
   cognitive_score_override: z.number().min(0).max(1).optional(),
 });
@@ -46,34 +47,27 @@ router.post(
     try {
       const validatedBody = sessionRequestSchema.parse(req.body);
       console.log(`[HV] validation: ${Date.now() - t0}ms`);
-      const { tenant_id, user_id, face_image_b64, cognitive_session_id, cognitive_score_override } = validatedBody;
+      const { tenant_id, user_id, face_detected, face_confidence, cognitive_session_id, cognitive_score_override } = validatedBody;
 
-      console.log('[HV] calling deepface + HCS in parallel');
-      const [deepfaceSettled, hcsSettled] = await Promise.allSettled([
-        analyzeface(face_image_b64, false),
+      // Face analysis is now done client-side via face-api.js
+      const deepfaceResult: DeepfaceAnalyzeResponse = {
+        face_detected,
+        liveness: face_detected,
+        confidence: face_confidence,
+      };
+      console.log('[HV] client face result:', JSON.stringify(deepfaceResult));
+
+      console.log('[HV] calling HCS');
+      const hcsSettled = await Promise.allSettled([
         getCognitiveScore(cognitive_session_id, cognitive_score_override),
       ]);
-      console.log(`[HV] allSettled done: ${Date.now() - t0}ms`);
-
-      let deepfaceResult: DeepfaceAnalyzeResponse;
-      if (deepfaceSettled.status === 'fulfilled') {
-        deepfaceResult = deepfaceSettled.value;
-      } else {
-        console.error('DeepFace call failed:', deepfaceSettled.reason);
-        deepfaceResult = {
-          face_detected: false,
-          liveness: false,
-          confidence: 0,
-          error: 'DEEPFACE_UNAVAILABLE',
-        };
-      }
-      console.log('[HV] deepface result:', JSON.stringify(deepfaceResult));
+      console.log(`[HV] HCS done: ${Date.now() - t0}ms`);
 
       let hcsResult: HcsScoreResponse;
-      if (hcsSettled.status === 'fulfilled') {
-        hcsResult = hcsSettled.value;
+      if (hcsSettled[0].status === 'fulfilled') {
+        hcsResult = hcsSettled[0].value;
       } else {
-        console.error('HCS call failed:', hcsSettled.reason);
+        console.error('HCS call failed:', hcsSettled[0].reason);
         hcsResult = {
           score: 0,
           passed: false,
@@ -175,7 +169,7 @@ router.post(
                 device_type: 'desktop',
                 processing_ms: processingMs,
                 timestamp: new Date().toISOString(),
-                deepface_model: 'ArcFace',
+                face_model: 'face-api.js/TinyFaceDetector',
               },
             }),
           }).catch(() => {}); // Silent — never block, never throw
