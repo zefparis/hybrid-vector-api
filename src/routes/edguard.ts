@@ -231,7 +231,6 @@ async function verifyEnrollmentFace(
   }
 
   const storedEmbedding = parseEmbedding(enrollment.embedding);
-  console.log('[EDGUARD-VERIFY] stored embedding found:', !!storedEmbedding, 'dims:', storedEmbedding?.length);
   if (!storedEmbedding) {
     throw new AppError(500, 'STORED_EMBEDDING_INVALID', 'Stored embedding is invalid');
   }
@@ -250,15 +249,16 @@ async function verifyEnrollmentFace(
   }
 
   const liveEmbedding = parseEmbedding(liveResult.embedding);
-  console.log('[EDGUARD-VERIFY] live embedding dims:', liveEmbedding?.length);
+  console.log('[EDGUARD-VERIFY] live embedding dims:', liveEmbedding ? liveEmbedding.length : 0);
+  console.log('[EDGUARD-VERIFY] stored embedding dims:', storedEmbedding.length);
 
   let similarity = 0;
-  if (liveEmbedding && storedEmbedding) {
+  if (liveEmbedding) {
     similarity = cosineSimilarity(storedEmbedding, liveEmbedding);
   }
 
   console.log('[EDGUARD-VERIFY] cosine similarity:', similarity);
-  console.log('[EDGUARD-VERIFY] threshold used:', threshold);
+  console.log('[EDGUARD-VERIFY] threshold:', threshold);
 
   const verified = similarity >= threshold;
   console.log('[EDGUARD-VERIFY] verified:', verified);
@@ -418,14 +418,10 @@ router.post(
       const verification = await verifyEnrollmentFace(tenant_id, student_id, selfie_b64, threshold);
 
       res.json({
-        success: true,
-        student_id,
         verified: verification.verified,
         similarity: verification.similarity,
-        threshold,
-        liveness: verification.liveness,
-        liveness_score: verification.liveness_score,
-        identity_confidence: verification.identity_confidence,
+        student_id: verification.enrollment.student_id,
+        first_name: verification.enrollment.first_name ?? '',
       });
     } catch (error) {
       next(error);
