@@ -348,15 +348,23 @@ router.post(
       };
 
       console.log('[EDGUARD-ENROLL] attempting Supabase upsert...');
-      const { error: upsertError, data: supabaseResult } = await client
-        .from('edguard_enrollments')
-        .upsert(enrollmentRow, { onConflict: 'tenant_id,student_id' })
-        .select();
-      console.log('[EDGUARD-ENROLL] Supabase result:', JSON.stringify(supabaseResult));
+      try {
+        const { data: supabaseResult, error: upsertError } = await client
+          .from('edguard_enrollments')
+          .upsert(enrollmentRow, { onConflict: 'tenant_id,student_id' })
+          .select();
 
-      if (upsertError) {
-        console.error('[EDGUARD-ENROLL] Supabase error:', upsertError.message);
-        throw new AppError(500, 'SUPABASE_UPSERT_FAILED', upsertError.message);
+        console.log('[EDGUARD-ENROLL] upsert error:', upsertError);
+        console.log('[EDGUARD-ENROLL] upsert data:', JSON.stringify(supabaseResult));
+
+        if (upsertError) {
+          console.error('[EDGUARD-ENROLL] Supabase error detail:', upsertError.message, upsertError.code, upsertError.details);
+          throw upsertError;
+        }
+      } catch (err: unknown) {
+        const e = err as Record<string, unknown>;
+        console.error('[EDGUARD-ENROLL] CATCH:', e.message, e.code, e.details);
+        throw new AppError(500, 'SUPABASE_UPSERT_FAILED', String(e.message ?? 'Unknown upsert error'));
       }
 
       res.status(201).json({
