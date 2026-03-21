@@ -53,6 +53,7 @@ async function analyzeDeepfaceOnce(
   const bodyStr = JSON.stringify({
     image_b64: rawB64,
     extract_embedding: extractEmbedding,
+    detector_backend: config.DEEPFACE_DETECTOR_BACKEND,
   });
   const extraHeaders = config.DEEPFACE_HMAC_SECRET
     ? signRequest(bodyStr, config.DEEPFACE_HMAC_SECRET)
@@ -76,8 +77,7 @@ async function analyzeDeepfaceOnce(
 
   const data = response.data;
   console.log(`[DEEPFACE] parsed: ${Date.now() - t0}ms`);
-  console.log('[DEEPFACE] face_detected:', data.face_detected);
-  console.log('[DEEPFACE] liveness:', data.liveness);
+  console.log('[DEEPFACE] full response:', JSON.stringify(data));
 
   return data;
 }
@@ -159,6 +159,7 @@ async function verifyFacesOnce(
   const bodyStr = JSON.stringify({
     image1_b64: raw1,
     image2_b64: raw2,
+    detector_backend: config.DEEPFACE_DETECTOR_BACKEND,
   });
   const extraHeaders = config.DEEPFACE_HMAC_SECRET
     ? signRequest(bodyStr, config.DEEPFACE_HMAC_SECRET)
