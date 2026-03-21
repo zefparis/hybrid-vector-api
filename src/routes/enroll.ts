@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { analyzeface } from '../services/deepfaceService';
+import { enrollFace } from '../services/rekognitionService';
 import { AppError, EnrollResponse, EnrolledUser } from '../types';
 
 const router = Router();
@@ -20,14 +20,10 @@ router.post(
       const validatedBody = enrollRequestSchema.parse(req.body);
       const { tenant_id, user_id, face_image_b64 } = validatedBody;
 
-      const deepfaceResult = await analyzeface(face_image_b64, true);
+      const enrollment = await enrollFace(face_image_b64, user_id);
 
-      if (!deepfaceResult.face_detected) {
+      if (!enrollment) {
         throw new AppError(422, 'NO_FACE_DETECTED', 'No face detected in the provided image');
-      }
-
-      if (!deepfaceResult.embedding || deepfaceResult.embedding.length === 0) {
-        throw new AppError(500, 'EMBEDDING_EXTRACTION_FAILED', 'Failed to extract face embedding');
       }
 
       const enrollmentKey = `${tenant_id}:${user_id}`;
@@ -36,7 +32,7 @@ router.post(
       const enrolledUser: EnrolledUser = {
         user_id,
         tenant_id,
-        embedding: deepfaceResult.embedding,
+        rekognition_face_id: enrollment.faceId,
         enrolled_at: enrolledAt,
       };
 

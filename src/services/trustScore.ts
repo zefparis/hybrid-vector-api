@@ -1,5 +1,5 @@
 import {
-  DeepfaceAnalyzeResponse,
+  FaceAnalysisResult,
   HcsScoreResponse,
   TrustScoreResult,
   TrustScoreBreakdown,
@@ -28,7 +28,7 @@ function getConfidenceLevel(score: number): ConfidenceLevel {
 }
 
 export function computeTrustScore(
-  deepfaceResult: DeepfaceAnalyzeResponse,
+  faceAnalysisResult: FaceAnalysisResult,
   hcsResult: HcsScoreResponse
 ): TrustScoreResult {
   const breakdown: TrustScoreBreakdown = {
@@ -40,7 +40,7 @@ export function computeTrustScore(
 
   let reason: TrustScoreReason = null;
 
-  if (deepfaceResult.error === 'DEEPFACE_UNAVAILABLE') {
+  if (faceAnalysisResult.error === 'FACE_ANALYSIS_UNAVAILABLE') {
     const cognitiveScore = hcsResult.score;
     const trustScore = Math.round(cognitiveScore * 60);
 
@@ -55,7 +55,7 @@ export function computeTrustScore(
     };
   }
 
-  if (!deepfaceResult.face_detected) {
+  if (!faceAnalysisResult.face_detected) {
     const cognitiveScore = hcsResult.score;
     const trustScore = Math.round(cognitiveScore * 60);
     breakdown.cognitive_score = cognitiveScore;
@@ -68,7 +68,7 @@ export function computeTrustScore(
     };
   }
 
-  if (!deepfaceResult.liveness) {
+  if (!faceAnalysisResult.liveness) {
     breakdown.cognitive_score = hcsResult.score;
     return {
       trust_score: 0,
@@ -90,8 +90,8 @@ export function computeTrustScore(
     };
   }
 
-  const livenessScore = deepfaceResult.liveness ? 1.0 : 0;
-  const confidenceScore = deepfaceResult.confidence;
+  const livenessScore = faceAnalysisResult.liveness ? 1.0 : 0;
+  const confidenceScore = faceAnalysisResult.confidence;
   const cognitiveScore = hcsResult.score;
 
   const bothAgree = livenessScore > 0.5 && cognitiveScore > 0.5;

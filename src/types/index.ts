@@ -14,7 +14,7 @@ export interface EnrollRequest {
   face_image_b64: string;
 }
 
-export interface DeepfaceAnalyzeResponse {
+export interface FaceAnalysisResult {
   face_detected: boolean;
   liveness: boolean;
   confidence: number;
@@ -91,7 +91,7 @@ export interface JwtPayload {
 export interface EnrolledUser {
   user_id: string;
   tenant_id: string;
-  embedding: number[];
+  rekognition_face_id: string;
   enrolled_at: string;
 }
 

@@ -1,6 +1,8 @@
 import { Buffer } from 'node:buffer';
 import {
+  CreateCollectionCommand,
   DeleteFacesCommand,
+  DescribeCollectionCommand,
   IndexFacesCommand,
   RekognitionClient,
   SearchFacesByImageCommand,
@@ -22,6 +24,31 @@ function normalizeImageBase64(imageBase64: string): string {
 
 function getImageBytes(imageBase64: string): Buffer {
   return Buffer.from(normalizeImageBase64(imageBase64), 'base64');
+}
+
+export async function ensureCollectionExists(): Promise<void> {
+  try {
+    await client.send(
+      new DescribeCollectionCommand({
+        CollectionId: COLLECTION_ID,
+      })
+    );
+    console.log('[REKOGNITION] collection exists:', COLLECTION_ID);
+  } catch (error) {
+    const err = error as { name?: string };
+
+    if (err.name !== 'ResourceNotFoundException') {
+      throw error;
+    }
+
+    const response = await client.send(
+      new CreateCollectionCommand({
+        CollectionId: COLLECTION_ID,
+      })
+    );
+
+    console.log('[REKOGNITION] collection created:', COLLECTION_ID, 'status:', response.StatusCode ?? 'unknown');
+  }
 }
 
 export async function enrollFace(

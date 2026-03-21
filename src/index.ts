@@ -6,6 +6,7 @@ import healthRouter from './routes/health';
 import sessionRouter from './routes/session';
 import enrollRouter from './routes/enroll';
 import edguardRouter from './routes/edguard';
+import { ensureCollectionExists } from './services/rekognitionService';
 
 const app: Express = express();
 
@@ -72,33 +73,17 @@ app.use(errorHandler);
 
 const PORT = config.PORT;
 
-app.listen(PORT, () => {
-  console.log(`🚀 hv-api running on port ${PORT}`);
-  console.log(`📍 Environment: ${config.NODE_ENV}`);
+async function bootstrap(): Promise<void> {
+  await ensureCollectionExists();
+  console.log('[REKOGNITION] region:', process.env.AWS_REGION || 'eu-central-1');
+  console.log('[REKOGNITION] key:', `${process.env.AWS_ACCESS_KEY_ID?.slice(0, 8) ?? ''}...`);
 
-  if (config.DEEPFACE_API_URL) {
-    // Pre-warm deepface-api 30s after startup
-    setTimeout(async () => {
-      try {
-        await fetch(`${config.DEEPFACE_API_URL}/health`);
-        console.log('deepface-api pre-warmed on startup');
-      } catch {}
-    }, 30000);
+  app.listen(PORT, () => {
+    console.log(`🚀 hv-api running on port ${PORT}`);
+    console.log(`📍 Environment: ${config.NODE_ENV}`);
+  });
+}
 
-    // Keep deepface-api warm - ping every 2 minutes
-    setInterval(async () => {
-      try {
-        await fetch(`${config.DEEPFACE_API_URL}/health`, {
-          signal: AbortSignal.timeout(5000),
-        });
-        console.log('deepface-api keep-alive ping OK');
-      } catch {
-        console.log('deepface-api keep-alive ping failed - cold start expected');
-      }
-    }, 2 * 60 * 1000);
-  } else {
-    console.log('deepface-api warmup disabled');
-  }
-});
+void bootstrap();
 
 export default app;

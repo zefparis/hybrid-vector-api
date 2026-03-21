@@ -9,7 +9,7 @@ import { supabase } from '../services/supabaseService';
 import {
   SessionResponse,
   JwtPayload,
-  DeepfaceAnalyzeResponse,
+  FaceAnalysisResult,
   HcsScoreResponse,
 } from '../types';
 
@@ -50,12 +50,12 @@ router.post(
       const { tenant_id, user_id, face_detected, face_confidence, cognitive_session_id, cognitive_score_override } = validatedBody;
 
       // Face analysis is now done client-side via face-api.js
-      const deepfaceResult: DeepfaceAnalyzeResponse = {
+      const faceAnalysisResult: FaceAnalysisResult = {
         face_detected,
         liveness: face_detected,
         confidence: face_confidence,
       };
-      console.log('[HV] client face result:', JSON.stringify(deepfaceResult));
+      console.log('[HV] client face result:', JSON.stringify(faceAnalysisResult));
 
       console.log('[HV] calling HCS');
       const hcsSettled = await Promise.allSettled([
@@ -76,7 +76,7 @@ router.post(
       }
       console.log('[HV] hcs result:', JSON.stringify(hcsResult));
 
-      const trustScoreResult = computeTrustScore(deepfaceResult, hcsResult);
+      const trustScoreResult = computeTrustScore(faceAnalysisResult, hcsResult);
       console.log(`[HV] trust score computed: ${Date.now() - t0}ms`);
       console.log(`[HV] trust_score=${trustScoreResult.trust_score} is_human=${trustScoreResult.is_human}`);
 
