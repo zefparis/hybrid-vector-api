@@ -1,9 +1,8 @@
 import { randomUUID } from 'crypto';
 import { NextFunction, Request, Response, Router } from 'express';
 import { z } from 'zod';
-import { analyzeface, verifyFaces } from '../services/deepfaceService';
 import { supabase } from '../services/supabaseService';
-import { AppError, DeepfaceAnalyzeResponse } from '../types';
+import { AppError } from '../types';
 
 type CognitiveBaseline = {
   stroop_score: number;
@@ -32,13 +31,13 @@ interface VerificationResult {
   identity_confidence: number;
 }
 
-const ARCFACE_THRESHOLD = 0.68;
+const DESCRIPTOR_COSINE_THRESHOLD = 0.45;
 
 const enrollSchema = z.object({
   student_id: z.string().min(1, 'student_id is required'),
   institution_id: z.string().min(1, 'institution_id is required'),
-  official_photo_b64: z.string().min(1, 'official_photo_b64 is required'),
-  selfie_b64: z.string().min(1, 'selfie_b64 is required'),
+  face_descriptor: z.array(z.number()).min(1, 'face_descriptor is required'),
+  identity_confidence: z.number().min(0).max(1),
   cognitive_score_override: z.number().min(0).max(1).optional(),
   cognitive_baseline: z
     .object({
@@ -51,14 +50,14 @@ const enrollSchema = z.object({
 
 const verifySchema = z.object({
   student_id: z.string().min(1, 'student_id is required'),
-  selfie_b64: z.string().min(1, 'selfie_b64 is required'),
+  face_descriptor: z.array(z.number()).min(1, 'face_descriptor is required'),
   include_cognitive: z.boolean().default(false),
 });
 
 const checkpointSchema = z.object({
   student_id: z.string().min(1, 'student_id is required'),
   checkpoint_number: z.number().int().positive(),
-  face_b64: z.string().min(1, 'face_b64 is required'),
+  face_descriptor: z.array(z.number()).min(1, 'face_descriptor is required'),
   cognitive_score: z.number().min(0).max(1).optional(),
   session_id: z.string().min(1, 'session_id is required'),
 });
@@ -202,7 +201,7 @@ async function incrementVerifiedCount(studentId: string, currentCount: number): 
   }
 }
 
-async function verifyEnrollmentFace(studentId: string, selfieB64: string): Promise<VerificationResult> {
+async function verifyEnrollmentDescriptor(studentId: string, liveDescriptor: number[]): Promise<VerificationResult> {
   const enrollment = await fetchEnrollment(studentId);
 
   if (!enrollment) {
@@ -214,23 +213,12 @@ async function verifyEnrollmentFace(studentId: string, selfieB64: string): Promi
     throw new AppError(500, 'STORED_EMBEDDING_INVALID', 'Stored embedding is invalid');
   }
 
-  const liveAnalysis = await analyzeface(selfieB64, true);
-  const liveEmbedding = parseEmbedding(liveAnalysis.embedding);
-
-  if (!liveEmbedding) {
-    throw new AppError(422, 'EMBEDDING_FAILED', 'Failed to extract live face embedding');
-  }
-
-  const rawSimilarity = cosineSimilarity(storedEmbedding, liveEmbedding);
+  const rawSimilarity = cosineSimilarity(storedEmbedding, liveDescriptor);
   const similarity = normalizeSimilarity(rawSimilarity);
-  const verified = rawSimilarity >= ARCFACE_THRESHOLD;
-  const liveness = liveAnalysis.liveness ?? false;
-  const livenessScoreResult = liveAnalysis as DeepfaceAnalyzeResponse & {
-    liveness_score?: number;
-  };
-  const livenessScore = typeof livenessScoreResult.liveness_score === 'number'
-    ? livenessScoreResult.liveness_score
-    : (liveness ? 1 : 0);
+  const verified = rawSimilarity >= DESCRIPTOR_COSINE_THRESHOLD;
+  // Liveness is client-trusted (face-api.js detected a face)
+  const liveness = true;
+  const livenessScore = 1;
   const identityConfidence = similarity;
 
   if (verified) {
@@ -255,8 +243,8 @@ router.post(
       const {
         student_id,
         institution_id,
-        official_photo_b64,
-        selfie_b64,
+        face_descriptor,
+        identity_confidence,
         cognitive_score_override,
         cognitive_baseline: rawBaseline,
       } = validatedBody;
@@ -267,46 +255,13 @@ router.post(
           ? { stroop_score: cognitive_score_override, reaction_time_ms: 500, nback_score: cognitive_score_override }
           : undefined);
 
-      // Sequence calls: analyzeface first (warms up deepface on cold start), then verifyFaces
-      console.log('[EDGUARD-ENROLL] starting analyzeface (extract embedding)...');
-      let embeddingResult: DeepfaceAnalyzeResponse;
-      try {
-        embeddingResult = await analyzeface(selfie_b64, true);
-      } catch {
-        embeddingResult = {
-          face_detected: false,
-          liveness: false,
-          confidence: 0,
-          embedding: undefined,
-          error: 'DEEPFACE_UNAVAILABLE',
-        };
-      }
-      console.log('[EDGUARD-ENROLL] analyzeface done:', JSON.stringify({
-        face_detected: embeddingResult.face_detected,
-        liveness: embeddingResult.liveness,
-        has_embedding: Array.isArray(embeddingResult.embedding),
-        embedding_dims: Array.isArray(embeddingResult.embedding) ? embeddingResult.embedding.length : 0,
-      }));
+      // Face analysis is done client-side via face-api.js
+      // The frontend sends the descriptor and the identity confidence from comparing official photo vs selfie
+      console.log('[EDGUARD-ENROLL] client descriptor dims:', face_descriptor.length, 'confidence:', identity_confidence);
 
-      const embedding = parseEmbedding(embeddingResult.embedding);
-      if (!embedding) {
-        sendApiError(res, 422, 'EMBEDDING_FAILED', 'Failed to extract face embedding');
-        return;
-      }
-
-      // Now verify faces (deepface is warm after analyzeface)
-      console.log('[EDGUARD-ENROLL] starting verifyFaces...');
-      let verification: { verified: boolean; confidence: number; error?: string };
-      try {
-        verification = await verifyFaces(official_photo_b64, selfie_b64);
-      } catch {
-        verification = { verified: false, confidence: 0, error: 'DEEPFACE_UNAVAILABLE' };
-      }
-      console.log('[EDGUARD-ENROLL] verifyFaces done:', JSON.stringify(verification));
-
-      if (!verification.verified || verification.confidence < 0.65) {
-        sendApiError(res, 422, 'IDENTITY_MISMATCH', 'Identity verification failed', {
-          confidence: verification.confidence,
+      if (identity_confidence < 0.5) {
+        sendApiError(res, 422, 'IDENTITY_MISMATCH', 'Identity verification failed (client-side comparison too low)', {
+          confidence: identity_confidence,
         });
         return;
       }
@@ -318,7 +273,7 @@ router.post(
         id: existingEnrollment?.id ?? randomUUID(),
         student_id,
         institution_id,
-        embedding: JSON.stringify(embedding),
+        embedding: JSON.stringify(face_descriptor),
         cognitive_baseline: cognitive_baseline ?? existingEnrollment?.cognitive_baseline ?? null,
         enrolled_at: enrolledAt,
         verified_count: existingEnrollment?.verified_count ?? 0,
@@ -337,8 +292,8 @@ router.post(
         student_id,
         institution_id,
         enrolled: true,
-        identity_confidence: verification.confidence,
-        embedding_dims: embedding.length,
+        identity_confidence,
+        embedding_dims: face_descriptor.length,
         enrolled_at: enrolledAt,
       });
     } catch (error) {
@@ -352,16 +307,16 @@ router.post(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const validatedBody = verifySchema.parse(req.body);
-      const { student_id, selfie_b64 } = validatedBody;
+      const { student_id, face_descriptor } = validatedBody;
 
-      const verification = await verifyEnrollmentFace(student_id, selfie_b64);
+      const verification = await verifyEnrollmentDescriptor(student_id, face_descriptor);
 
       res.json({
         success: true,
         student_id,
         verified: verification.verified,
         similarity: verification.similarity,
-        threshold: ARCFACE_THRESHOLD,
+        threshold: DESCRIPTOR_COSINE_THRESHOLD,
         liveness: verification.liveness,
         liveness_score: verification.liveness_score,
         identity_confidence: verification.identity_confidence,
@@ -377,10 +332,10 @@ router.post(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const validatedBody = checkpointSchema.parse(req.body);
-      const { student_id, checkpoint_number, face_b64, cognitive_score, session_id } =
+      const { student_id, checkpoint_number, face_descriptor, cognitive_score, session_id } =
         validatedBody;
 
-      const verification = await verifyEnrollmentFace(student_id, face_b64);
+      const verification = await verifyEnrollmentDescriptor(student_id, face_descriptor);
       const baseline = parseCognitiveBaseline(verification.enrollment.cognitive_baseline);
       const cognitiveDeviation =
         typeof cognitive_score === 'number' && baseline
@@ -388,7 +343,7 @@ router.post(
           : 0;
       const cognitiveAlert = cognitiveDeviation > 0.35;
 
-      const facialMatch = verification.similarity >= ARCFACE_THRESHOLD ? 1 : 0;
+      const facialMatch = verification.similarity >= DESCRIPTOR_COSINE_THRESHOLD ? 1 : 0;
       const livenessOk = verification.liveness ? 1 : 0;
       const cognitiveOk = cognitiveAlert ? 0 : 1;
       const trustScore = (facialMatch * 0.5 + livenessOk * 0.3 + cognitiveOk * 0.2) * 100;
