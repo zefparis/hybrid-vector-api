@@ -321,6 +321,14 @@ router.post(
 
       const identityConfidence = embeddingResult.confidence ?? 0;
 
+      console.log('[EDGUARD-ENROLL] body received:', JSON.stringify({
+        student_id,
+        first_name,
+        last_name,
+        email,
+        tenant_id,
+      }));
+
       const client = getSupabaseClient();
       const existingEnrollment = await fetchEnrollment(tenant_id, student_id);
       const enrolledAt = new Date().toISOString();
@@ -339,12 +347,16 @@ router.post(
         verified_count: existingEnrollment?.verified_count ?? 0,
       };
 
-      const { error } = await client
+      console.log('[EDGUARD-ENROLL] attempting Supabase upsert...');
+      const { error: upsertError, data: supabaseResult } = await client
         .from('edguard_enrollments')
-        .upsert(enrollmentRow, { onConflict: 'tenant_id,student_id' });
+        .upsert(enrollmentRow, { onConflict: 'tenant_id,student_id' })
+        .select();
+      console.log('[EDGUARD-ENROLL] Supabase result:', JSON.stringify(supabaseResult));
 
-      if (error) {
-        throw new AppError(500, 'SUPABASE_UPSERT_FAILED', error.message);
+      if (upsertError) {
+        console.error('[EDGUARD-ENROLL] Supabase error:', upsertError.message);
+        throw new AppError(500, 'SUPABASE_UPSERT_FAILED', upsertError.message);
       }
 
       res.status(201).json({
