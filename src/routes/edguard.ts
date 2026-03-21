@@ -18,6 +18,10 @@ interface EdguardEnrollmentRow {
   tenant_id: string;
   student_id: string;
   institution_id: string;
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+  role: string;
   embedding: string | number[];
   cognitive_baseline: CognitiveBaseline | null;
   enrolled_at: string;
@@ -45,6 +49,10 @@ const enrollSchema = z.object({
   student_id: z.string().min(1, 'student_id is required'),
   institution_id: z.string().min(1, 'institution_id is required'),
   selfie_b64: z.string().min(1, 'selfie_b64 is required'),
+  first_name: z.string().optional(),
+  last_name: z.string().optional(),
+  email: z.string().email().optional(),
+  role: z.enum(['student', 'teacher', 'beneficiary']).optional().default('student'),
   cognitive_score_override: z.number().min(0).max(1).optional(),
   cognitive_baseline: z
     .object({
@@ -270,6 +278,10 @@ router.post(
         student_id,
         institution_id,
         selfie_b64,
+        first_name,
+        last_name,
+        email,
+        role,
         cognitive_score_override,
         cognitive_baseline: rawBaseline,
       } = validatedBody;
@@ -317,6 +329,10 @@ router.post(
         tenant_id,
         student_id,
         institution_id,
+        first_name: first_name ?? existingEnrollment?.first_name ?? null,
+        last_name: last_name ?? existingEnrollment?.last_name ?? null,
+        email: email ?? existingEnrollment?.email ?? null,
+        role: role ?? existingEnrollment?.role ?? 'student',
         embedding: JSON.stringify(embedding),
         cognitive_baseline: cognitive_baseline ?? existingEnrollment?.cognitive_baseline ?? null,
         enrolled_at: enrolledAt,
