@@ -41,8 +41,9 @@ async function analyzeDeepfaceOnce(
   timeoutMs: number,
   t0: number
 ): Promise<DeepfaceApiResponse> {
+  const rawB64 = imageB64.replace(/^data:image\/\w+;base64,/, '');
   const bodyStr = JSON.stringify({
-    image_b64: imageB64,
+    image_b64: rawB64,
     extract_embedding: extractEmbedding,
   });
   const extraHeaders = config.DEEPFACE_HMAC_SECRET
@@ -146,9 +147,11 @@ export async function verifyFaces(
   image2B64: string
 ): Promise<{ verified: boolean; confidence: number; error?: string }> {
   try {
+    const raw1 = image1B64.replace(/^data:image\/\w+;base64,/, '');
+    const raw2 = image2B64.replace(/^data:image\/\w+;base64,/, '');
     const bodyStr = JSON.stringify({
-      image1_b64: image1B64,
-      image2_b64: image2B64,
+      image1_b64: raw1,
+      image2_b64: raw2,
     });
     const extraHeaders = config.DEEPFACE_HMAC_SECRET
       ? signRequest(bodyStr, config.DEEPFACE_HMAC_SECRET)

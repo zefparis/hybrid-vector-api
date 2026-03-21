@@ -56,6 +56,7 @@ export function computeTrustScore(
   }
 
   if (!deepfaceResult.face_detected) {
+    breakdown.cognitive_score = hcsResult.score;
     return {
       trust_score: 0,
       is_human: false,
@@ -66,6 +67,7 @@ export function computeTrustScore(
   }
 
   if (!deepfaceResult.liveness) {
+    breakdown.cognitive_score = hcsResult.score;
     return {
       trust_score: 0,
       is_human: false,
@@ -76,6 +78,7 @@ export function computeTrustScore(
   }
 
   if (hcsResult.score < THRESHOLDS.min_cognitive) {
+    breakdown.cognitive_score = hcsResult.score;
     return {
       trust_score: 0,
       is_human: false,
