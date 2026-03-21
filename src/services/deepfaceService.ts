@@ -150,45 +150,81 @@ export async function analyzeface(
   }
 }
 
+async function verifyFacesOnce(
+  raw1: string,
+  raw2: string,
+  timeoutMs: number,
+  t0: number
+): Promise<{ verified: boolean; confidence: number }> {
+  const bodyStr = JSON.stringify({
+    image1_b64: raw1,
+    image2_b64: raw2,
+  });
+  const extraHeaders = config.DEEPFACE_HMAC_SECRET
+    ? signRequest(bodyStr, config.DEEPFACE_HMAC_SECRET)
+    : {};
+
+  const response = await axios.post<{ verified: boolean; confidence: number }>(
+    `${config.DEEPFACE_API_URL}/analyze/verify`,
+    bodyStr,
+    {
+      headers: {
+        'X-API-Key': config.DEEPFACE_API_KEY,
+        'Content-Type': 'application/json',
+        ...extraHeaders,
+      },
+      timeout: timeoutMs,
+    }
+  );
+
+  console.log(`[DEEPFACE-VERIFY] done: ${Date.now() - t0}ms, status:`, response.status);
+  console.log('[DEEPFACE-VERIFY] verified:', response.data.verified, 'confidence:', response.data.confidence);
+
+  return {
+    verified: response.data.verified ?? false,
+    confidence: response.data.confidence ?? 0,
+  };
+}
+
 export async function verifyFaces(
   image1B64: string,
   image2B64: string
 ): Promise<{ verified: boolean; confidence: number; error?: string }> {
+  const t0 = Date.now();
+  const raw1 = image1B64.replace(/^data:image\/\w+;base64,/, '');
+  const raw2 = image2B64.replace(/^data:image\/\w+;base64,/, '');
+  console.log('[DEEPFACE-VERIFY] image1 length:', raw1.length, 'image2 length:', raw2.length);
+
   try {
-    const raw1 = image1B64.replace(/^data:image\/\w+;base64,/, '');
-    const raw2 = image2B64.replace(/^data:image\/\w+;base64,/, '');
-    const bodyStr = JSON.stringify({
-      image1_b64: raw1,
-      image2_b64: raw2,
-    });
-    const extraHeaders = config.DEEPFACE_HMAC_SECRET
-      ? signRequest(bodyStr, config.DEEPFACE_HMAC_SECRET)
-      : {};
-
-    const response = await axios.post<{ verified: boolean; confidence: number }>(
-      `${config.DEEPFACE_API_URL}/analyze/verify`,
-      bodyStr,
-      {
-        headers: {
-          'X-API-Key': config.DEEPFACE_API_KEY,
-          'Content-Type': 'application/json',
-          ...extraHeaders,
-        },
-        timeout: VERIFY_TIMEOUT_MS,
-      }
-    );
-
-    return {
-      verified: response.data.verified ?? false,
-      confidence: response.data.confidence ?? 0,
-    };
+    return await verifyFacesOnce(raw1, raw2, ANALYZE_FIRST_TIMEOUT_MS, t0);
   } catch (error) {
+    if (isTimeoutError(error)) {
+      console.log('[DEEPFACE-VERIFY] cold start detected, retrying...');
+      try {
+        return await verifyFacesOnce(raw1, raw2, VERIFY_TIMEOUT_MS, t0);
+      } catch (retryError) {
+        const axiosRetryError = retryError as AxiosError;
+        console.error('[DEEPFACE-VERIFY] retry failed:', axiosRetryError.message, 'status:', axiosRetryError.response?.status);
+        return { verified: false, confidence: 0, error: 'DEEPFACE_UNAVAILABLE' };
+      }
+    }
+
     const axiosError = error as AxiosError;
-    console.error('DeepFace verify error:', axiosError.message);
-    return {
-      verified: false,
-      confidence: 0,
-      error: 'DEEPFACE_UNAVAILABLE',
-    };
+    const status = axiosError.response?.status;
+    // Retry once on 502/503 (cold start / deploy in progress)
+    if (status === 502 || status === 503) {
+      console.log(`[DEEPFACE-VERIFY] got ${status}, retrying in 2s...`);
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        return await verifyFacesOnce(raw1, raw2, VERIFY_TIMEOUT_MS, t0);
+      } catch (retryError) {
+        const axiosRetryError = retryError as AxiosError;
+        console.error('[DEEPFACE-VERIFY] retry after 502 failed:', axiosRetryError.message);
+        return { verified: false, confidence: 0, error: 'DEEPFACE_UNAVAILABLE' };
+      }
+    }
+
+    console.error('[DEEPFACE-VERIFY] error:', axiosError.message, 'status:', status);
+    return { verified: false, confidence: 0, error: 'DEEPFACE_UNAVAILABLE' };
   }
 }

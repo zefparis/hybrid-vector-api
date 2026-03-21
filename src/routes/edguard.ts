@@ -267,41 +267,47 @@ router.post(
           ? { stroop_score: cognitive_score_override, reaction_time_ms: 500, nback_score: cognitive_score_override }
           : undefined);
 
-      const [verificationSettled, embeddingSettled] = await Promise.allSettled([
-        verifyFaces(official_photo_b64, selfie_b64),
-        analyzeface(selfie_b64, true),
-      ]);
+      // Sequence calls: analyzeface first (warms up deepface on cold start), then verifyFaces
+      console.log('[EDGUARD-ENROLL] starting analyzeface (extract embedding)...');
+      let embeddingResult: DeepfaceAnalyzeResponse;
+      try {
+        embeddingResult = await analyzeface(selfie_b64, true);
+      } catch {
+        embeddingResult = {
+          face_detected: false,
+          liveness: false,
+          confidence: 0,
+          embedding: undefined,
+          error: 'DEEPFACE_UNAVAILABLE',
+        };
+      }
+      console.log('[EDGUARD-ENROLL] analyzeface done:', JSON.stringify({
+        face_detected: embeddingResult.face_detected,
+        liveness: embeddingResult.liveness,
+        has_embedding: Array.isArray(embeddingResult.embedding),
+        embedding_dims: Array.isArray(embeddingResult.embedding) ? embeddingResult.embedding.length : 0,
+      }));
 
-      const verification =
-        verificationSettled.status === 'fulfilled'
-          ? verificationSettled.value
-          : {
-              verified: false,
-              confidence: 0,
-              error: 'DEEPFACE_UNAVAILABLE',
-            };
+      const embedding = parseEmbedding(embeddingResult.embedding);
+      if (!embedding) {
+        sendApiError(res, 422, 'EMBEDDING_FAILED', 'Failed to extract face embedding');
+        return;
+      }
+
+      // Now verify faces (deepface is warm after analyzeface)
+      console.log('[EDGUARD-ENROLL] starting verifyFaces...');
+      let verification: { verified: boolean; confidence: number; error?: string };
+      try {
+        verification = await verifyFaces(official_photo_b64, selfie_b64);
+      } catch {
+        verification = { verified: false, confidence: 0, error: 'DEEPFACE_UNAVAILABLE' };
+      }
+      console.log('[EDGUARD-ENROLL] verifyFaces done:', JSON.stringify(verification));
 
       if (!verification.verified || verification.confidence < 0.65) {
         sendApiError(res, 422, 'IDENTITY_MISMATCH', 'Identity verification failed', {
           confidence: verification.confidence,
         });
-        return;
-      }
-
-      const embeddingResult =
-        embeddingSettled.status === 'fulfilled'
-          ? embeddingSettled.value
-          : {
-              face_detected: false,
-              liveness: false,
-              confidence: 0,
-              embedding: undefined,
-              error: 'DEEPFACE_UNAVAILABLE',
-            };
-
-      const embedding = parseEmbedding(embeddingResult.embedding);
-      if (!embedding) {
-        sendApiError(res, 422, 'EMBEDDING_FAILED', 'Failed to extract face embedding');
         return;
       }
 
