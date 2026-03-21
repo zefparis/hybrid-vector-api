@@ -42,6 +42,14 @@ async function analyzeDeepfaceOnce(
   t0: number
 ): Promise<DeepfaceApiResponse> {
   const rawB64 = imageB64.replace(/^data:image\/\w+;base64,/, '');
+  console.log('[DEEPFACE] image length:', rawB64.length);
+  console.log('[DEEPFACE] first 50 chars:', rawB64.substring(0, 50));
+  if (rawB64.length < 10000) {
+    console.warn('[DEEPFACE] WARNING: image suspiciously small, likely corrupted or blank');
+  }
+  if (rawB64.startsWith('data:')) {
+    console.warn('[DEEPFACE] WARNING: base64 prefix strip failed, still starts with data:');
+  }
   const bodyStr = JSON.stringify({
     image_b64: rawB64,
     extract_embedding: extractEmbedding,
