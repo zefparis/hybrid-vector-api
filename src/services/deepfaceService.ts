@@ -35,6 +35,18 @@ function isTimeoutError(error: unknown): boolean {
   return axiosError.code === 'ECONNABORTED' || axiosError.code === 'ETIMEDOUT';
 }
 
+function isRetryableStatus(error: unknown): boolean {
+  const axiosError = error as AxiosError;
+  const status = axiosError.response?.status;
+  return status === 502 || status === 503;
+}
+
+function truncateBody(data: unknown, maxLen = 200): string {
+  const raw = typeof data === 'string' ? data : JSON.stringify(data);
+  if (!raw) return '(empty)';
+  return raw.length > maxLen ? raw.substring(0, maxLen) + `... (${raw.length} chars total)` : raw;
+}
+
 async function analyzeDeepfaceOnce(
   imageB64: string,
   extractEmbedding: boolean,
@@ -107,11 +119,16 @@ export async function analyzeface(
       embedding: data.embedding,
     };
   } catch (error) {
-    if (isTimeoutError(error)) {
-      console.log('[DEEPFACE] cold start detected, retrying...');
+    const axiosError = error as AxiosError;
+
+    // Retry on timeout or 502/503 (Render cold start / deploy in progress)
+    if (isTimeoutError(error) || isRetryableStatus(error)) {
+      const reason = isTimeoutError(error) ? 'timeout' : `HTTP ${axiosError.response?.status}`;
+      console.log(`[DEEPFACE] ${reason} detected, retrying in 2s...`);
+      await new Promise((r) => setTimeout(r, 2000));
 
       try {
-        console.log('[DEEPFACE] fetch start');
+        console.log('[DEEPFACE] retry fetch start');
         const data = await analyzeDeepfaceOnce(
           imageB64,
           extractEmbedding,
@@ -127,8 +144,7 @@ export async function analyzeface(
         };
       } catch (retryError) {
         const axiosRetryError = retryError as AxiosError;
-        console.error('deepface error:', retryError);
-        console.error('deepface timeout — code:', axiosRetryError.code);
+        console.error('[DEEPFACE] retry failed — code:', axiosRetryError.code, 'status:', axiosRetryError.response?.status);
         return {
           face_detected: false,
           liveness: false,
@@ -138,9 +154,7 @@ export async function analyzeface(
       }
     }
 
-    const axiosError = error as AxiosError;
-    console.error('deepface error:', error);
-    console.error('deepface error detail — status:', axiosError.response?.status, 'body:', JSON.stringify(axiosError.response?.data));
+    console.error('[DEEPFACE] error — status:', axiosError.response?.status, 'message:', axiosError.message, 'body:', truncateBody(axiosError.response?.data));
     return {
       face_detected: false,
       liveness: false,
@@ -199,33 +213,23 @@ export async function verifyFaces(
   try {
     return await verifyFacesOnce(raw1, raw2, ANALYZE_FIRST_TIMEOUT_MS, t0);
   } catch (error) {
-    if (isTimeoutError(error)) {
-      console.log('[DEEPFACE-VERIFY] cold start detected, retrying...');
-      try {
-        return await verifyFacesOnce(raw1, raw2, VERIFY_TIMEOUT_MS, t0);
-      } catch (retryError) {
-        const axiosRetryError = retryError as AxiosError;
-        console.error('[DEEPFACE-VERIFY] retry failed:', axiosRetryError.message, 'status:', axiosRetryError.response?.status);
-        return { verified: false, confidence: 0, error: 'DEEPFACE_UNAVAILABLE' };
-      }
-    }
-
     const axiosError = error as AxiosError;
-    const status = axiosError.response?.status;
-    // Retry once on 502/503 (cold start / deploy in progress)
-    if (status === 502 || status === 503) {
-      console.log(`[DEEPFACE-VERIFY] got ${status}, retrying in 2s...`);
+
+    // Retry on timeout or 502/503 (Render cold start / deploy in progress)
+    if (isTimeoutError(error) || isRetryableStatus(error)) {
+      const reason = isTimeoutError(error) ? 'timeout' : `HTTP ${axiosError.response?.status}`;
+      console.log(`[DEEPFACE-VERIFY] ${reason} detected, retrying in 2s...`);
       await new Promise((r) => setTimeout(r, 2000));
       try {
         return await verifyFacesOnce(raw1, raw2, VERIFY_TIMEOUT_MS, t0);
       } catch (retryError) {
         const axiosRetryError = retryError as AxiosError;
-        console.error('[DEEPFACE-VERIFY] retry after 502 failed:', axiosRetryError.message);
+        console.error('[DEEPFACE-VERIFY] retry failed — code:', axiosRetryError.code, 'status:', axiosRetryError.response?.status);
         return { verified: false, confidence: 0, error: 'DEEPFACE_UNAVAILABLE' };
       }
     }
 
-    console.error('[DEEPFACE-VERIFY] error:', axiosError.message, 'status:', status);
+    console.error('[DEEPFACE-VERIFY] error — status:', axiosError.response?.status, 'message:', axiosError.message, 'body:', truncateBody(axiosError.response?.data));
     return { verified: false, confidence: 0, error: 'DEEPFACE_UNAVAILABLE' };
   }
 }
