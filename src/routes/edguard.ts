@@ -138,15 +138,22 @@ function parseCognitiveBaseline(value: unknown): CognitiveBaseline | null {
 }
 
 function parseEmbedding(value: unknown): number[] | null {
-  if (Array.isArray(value) && value.every((entry) => typeof entry === 'number')) {
-    return value;
+  if (Array.isArray(value) && value.length > 0) {
+    // Coerce string numbers to actual numbers (e.g., ["0.123", ...] → [0.123, ...])
+    const coerced = value.map(Number);
+    if (coerced.every((n) => !isNaN(n))) {
+      return coerced;
+    }
   }
 
   if (typeof value === 'string') {
     try {
       const parsed: unknown = JSON.parse(value);
-      if (Array.isArray(parsed) && parsed.every((entry) => typeof entry === 'number')) {
-        return parsed;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const coerced = parsed.map(Number);
+        if (coerced.every((n) => !isNaN(n))) {
+          return coerced;
+        }
       }
     } catch {
       return null;
@@ -313,6 +320,12 @@ router.post(
         embedding_dims: Array.isArray(embeddingResult.embedding) ? embeddingResult.embedding.length : 0,
       }));
 
+      console.log('[EDGUARD-ENROLL] embedding raw:',
+        typeof embeddingResult.embedding,
+        Array.isArray(embeddingResult.embedding),
+        Array.isArray(embeddingResult.embedding) ? embeddingResult.embedding.length : 'NOT_ARRAY',
+        embeddingResult.error ?? 'no_error'
+      );
       const embedding = parseEmbedding(embeddingResult.embedding);
       if (!embedding) {
         console.log('[EDGUARD-ENROLL] early return: embedding is null/invalid after parseEmbedding — raw type:', typeof embeddingResult.embedding, 'isArray:', Array.isArray(embeddingResult.embedding), 'error:', embeddingResult.error);
