@@ -18,7 +18,7 @@ async function resolveTenantId(apiKey: string): Promise<string> {
   if (supabase) {
     try {
       const { data } = await supabase
-        .from('tenants')
+        .from('edguard_tenants')
         .select('tenant_id')
         .eq('api_key', apiKey)
         .maybeSingle();
