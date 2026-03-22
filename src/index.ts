@@ -1,6 +1,7 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
 import { config } from './config';
 import { apiKeyMiddleware } from './middleware/apiKey';
+import { edguardApiKeyMiddleware } from './middleware/edguardApiKey';
 import { errorHandler } from './middleware/errorHandler';
 import healthRouter from './routes/health';
 import sessionRouter from './routes/session';
@@ -64,10 +65,12 @@ app.use(express.json({ limit: '10mb' }));
 
 app.use(healthRouter);
 
-app.use(apiKeyMiddleware);
-app.use(sessionRouter);
-app.use(enrollRouter);
-app.use('/edguard', apiKeyMiddleware, edguardRouter);
+// HV core endpoints are protected by the main HV API key middleware
+app.use(apiKeyMiddleware, sessionRouter);
+app.use(apiKeyMiddleware, enrollRouter);
+
+// EDGUARD endpoints are protected by EDGUARD tenants keys (edguard_tenants table)
+app.use('/edguard', edguardApiKeyMiddleware, edguardRouter);
 
 app.use(errorHandler);
 
