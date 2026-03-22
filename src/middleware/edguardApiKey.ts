@@ -30,6 +30,7 @@ export async function edguardApiKeyMiddleware(
   console.log('[EDGUARD-AUTH] key:', apiKey?.slice(0, 12));
 
   if (!apiKey) {
+    console.log('[EDGUARD-AUTH] REJECTING key:', req.headers['x-api-key']);
     next(new AppError(403, 'MISSING_API_KEY', 'X-API-Key header is required'));
     return;
   }
@@ -54,6 +55,7 @@ export async function edguardApiKeyMiddleware(
   console.log('[EDGUARD-AUTH] tenant found:', tenant?.tenant_id);
 
   if (!tenant?.tenant_id) {
+    console.log('[EDGUARD-AUTH] REJECTING key:', req.headers['x-api-key']);
     next(new AppError(403, 'INVALID_API_KEY', 'Invalid API key'));
     return;
   }

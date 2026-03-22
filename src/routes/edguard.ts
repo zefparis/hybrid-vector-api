@@ -77,6 +77,12 @@ const checkpointSchema = z.object({
 
 const router = Router();
 
+// TEMP DEBUG: confirm the route is hit and the header is present (auth happens at app-level)
+router.use((req, _res, next) => {
+  console.log('[EDGUARD-DEBUG] route hit, key:', req.headers['x-api-key']);
+  next();
+});
+
 const ULID_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
 function ulid(): string {
