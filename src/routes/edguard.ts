@@ -24,6 +24,9 @@ interface EdguardEnrollmentRow {
   role?: string | null;
   embedding?: string | number[] | null;
   rekognition_face_id: string | null;
+  // Voice biometrics (JSONB + FLOAT in Supabase)
+  vocal_embedding?: number[] | null;
+  vocal_quality?: number | null;
   cognitive_baseline?: CognitiveBaseline | null;
   enrolled_at: string;
   verified_count?: number;
@@ -285,6 +288,23 @@ router.post(
   '/enroll',
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      const body = req.body as {
+        cognitive_baseline?: {
+          vocal_embedding?: unknown;
+          vocal_quality?: unknown;
+        };
+      };
+
+      const { vocal_embedding, vocal_quality } = body.cognitive_baseline || {};
+
+      console.log(
+        '[ENROLL] vocal_embedding dims:',
+        Array.isArray(vocal_embedding) ? vocal_embedding.length : 'none'
+      );
+
+      const vocalEmbedding = Array.isArray(vocal_embedding) ? (vocal_embedding as number[]) : null;
+      const vocalQuality = typeof vocal_quality === 'number' ? vocal_quality : null;
+
       const validatedBody = enrollSchema.parse(req.body);
       const {
         selfie_b64,
@@ -324,6 +344,8 @@ router.post(
         email: email ?? null,
         tenant_id,
         rekognition_face_id: enrollmentFace.faceId,
+        vocal_embedding: vocalEmbedding ?? null,
+        vocal_quality: vocalQuality ?? null,
         enrolled_at: enrolledAt,
       } satisfies Partial<EdguardEnrollmentRow>;
 
