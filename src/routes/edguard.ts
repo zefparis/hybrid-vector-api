@@ -27,6 +27,10 @@ interface EdguardEnrollmentRow {
   // Voice biometrics (JSONB + FLOAT in Supabase)
   vocal_embedding?: number[] | null;
   vocal_quality?: number | null;
+  // Behavioral profile + Post-quantum fields
+  behavioral_profile?: unknown | null;
+  pq_public_key?: string | null;
+  pq_signature?: string | null;
   cognitive_baseline?: CognitiveBaseline | null;
   enrolled_at: string;
   verified_count?: number;
@@ -292,18 +296,33 @@ router.post(
         cognitive_baseline?: {
           vocal_embedding?: unknown;
           vocal_quality?: unknown;
+          behavioral?: unknown;
+          pq_public_key?: unknown;
+          pq_signature?: unknown;
         };
       };
 
-      const { vocal_embedding, vocal_quality } = body.cognitive_baseline || {};
+      const {
+        vocal_embedding,
+        vocal_quality,
+        behavioral,
+        pq_public_key,
+        pq_signature,
+      } = body.cognitive_baseline || {};
 
       console.log(
         '[ENROLL] vocal_embedding dims:',
         Array.isArray(vocal_embedding) ? vocal_embedding.length : 'none'
       );
 
+      console.log('[ENROLL] behavioral:', Boolean(behavioral));
+      console.log('[ENROLL] pq_public_key:', Boolean(pq_public_key));
+
       const vocalEmbedding = Array.isArray(vocal_embedding) ? (vocal_embedding as number[]) : null;
       const vocalQuality = typeof vocal_quality === 'number' ? vocal_quality : null;
+      const behavioralProfile = behavioral ?? null;
+      const pqPublicKey = typeof pq_public_key === 'string' ? pq_public_key : null;
+      const pqSignature = typeof pq_signature === 'string' ? pq_signature : null;
 
       const validatedBody = enrollSchema.parse(req.body);
       const {
@@ -346,6 +365,9 @@ router.post(
         rekognition_face_id: enrollmentFace.faceId,
         vocal_embedding: vocalEmbedding ?? null,
         vocal_quality: vocalQuality ?? null,
+        behavioral_profile: behavioralProfile,
+        pq_public_key: pqPublicKey,
+        pq_signature: pqSignature,
         enrolled_at: enrolledAt,
       } satisfies Partial<EdguardEnrollmentRow>;
 
