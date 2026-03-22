@@ -66,8 +66,10 @@ app.use(express.json({ limit: '10mb' }));
 app.use(healthRouter);
 
 // HV core endpoints are protected by the main HV API key middleware
-app.use(apiKeyMiddleware, sessionRouter);
-app.use(apiKeyMiddleware, enrollRouter);
+// IMPORTANT: scope it ONLY to /auth/* so it doesn't block /edguard/*
+app.use('/auth', apiKeyMiddleware);
+app.use(sessionRouter);
+app.use(enrollRouter);
 
 // EDGUARD endpoints are protected by EDGUARD tenants keys (edguard_tenants table)
 app.use('/edguard', edguardApiKeyMiddleware, edguardRouter);
