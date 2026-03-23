@@ -63,6 +63,19 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
 app.use(express.json({ limit: '10mb' }));
 
+// Root endpoint
+app.get('/', (_req: Request, res: Response): void => {
+  res.json({
+    message: 'API is running',
+    version: '1.0.0',
+    endpoints: {
+      health: '/health',
+      auth: '/auth/session',
+      edguard: '/edguard/*',
+    },
+  });
+});
+
 app.use(healthRouter);
 
 // HV core endpoints are protected by the main HV API key middleware
@@ -79,16 +92,25 @@ app.use(errorHandler);
 const PORT = config.PORT;
 
 async function bootstrap(): Promise<void> {
-  await ensureCollectionExists();
-  console.log('[REKOGNITION] region:', process.env.AWS_REGION || 'eu-central-1');
-  console.log('[REKOGNITION] key:', `${process.env.AWS_ACCESS_KEY_ID?.slice(0, 8) ?? ''}...`);
+  try {
+    await ensureCollectionExists();
+    console.log('[REKOGNITION] region:', process.env.AWS_REGION || 'eu-central-1');
+    console.log('[REKOGNITION] key:', `${process.env.AWS_ACCESS_KEY_ID?.slice(0, 8) ?? ''}...`);
+  } catch (error) {
+    console.error('[BOOTSTRAP] Rekognition setup failed:', error);
+    console.log('[BOOTSTRAP] Continuing without Rekognition...');
+  }
 
-  app.listen(PORT, () => {
+  app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 hv-api running on port ${PORT}`);
     console.log(`📍 Environment: ${config.NODE_ENV}`);
+    console.log(`📡 Listening on 0.0.0.0:${PORT}`);
   });
 }
 
-void bootstrap();
+bootstrap().catch((error) => {
+  console.error('[BOOTSTRAP] Fatal error:', error);
+  process.exit(1);
+});
 
 export default app;
