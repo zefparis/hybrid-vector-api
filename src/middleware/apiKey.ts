@@ -3,7 +3,7 @@ import { config } from '../config';
 import { supabase } from '../services/supabaseService';
 import { AppError } from '../types';
 
-const DEFAULT_TENANT_ID = 'demo-tenant';
+const DEFAULT_TENANT_ID = 'edguard-demo';
 
 // In-memory cache: api_key → tenant_id (avoids DB hit on every request)
 const tenantCache = new Map<string, { tenant_id: string; expiry: number }>();

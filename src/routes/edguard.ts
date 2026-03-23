@@ -36,7 +36,7 @@ interface EdguardEnrollmentRow {
   verified_count?: number;
 }
 
-const DEFAULT_TENANT_ID = 'demo-tenant';
+const DEFAULT_TENANT_ID = 'edguard-demo';
 
 function getTenantId(req: Request): string {
   return req.tenant_id ?? DEFAULT_TENANT_ID;
