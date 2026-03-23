@@ -9,6 +9,8 @@ const envSchema = z.object({
   HV_API_KEY: z.string().min(1),
   JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
   JWT_EXPIRES_IN: z.coerce.number().int().positive().default(3600),
+  // PORT est géré explicitement plus bas via parseInt(process.env.PORT || '3000', 10),
+  // mais on le garde dans le schéma pour que le type EnvConfig l'inclue.
   PORT: z.coerce.number().int().positive().default(3000),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('production'),
   HCS_INGEST_URL: z.string().url().optional(),
@@ -29,7 +31,12 @@ function validateEnv(): EnvConfig {
     process.exit(1);
   }
 
-  return result.data;
+  const data = result.data;
+
+  return {
+    ...data,
+    PORT: parseInt(process.env.PORT || '3000', 10),
+  } as EnvConfig;
 }
 
 export const config = validateEnv();
