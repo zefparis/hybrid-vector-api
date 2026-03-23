@@ -1,9 +1,9 @@
-# fly.toml app configuration file generated for hybrid-vector-api-lingering-pine-5709 on 2026-03-23T09:16:35+01:00
+# fly.toml app configuration file generated for hybrid-vector-api on 2026-03-23T08:24:13Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'hybrid-vector-api-lingering-pine-5709'
+app = 'hybrid-vector-api'
 primary_region = 'jnb'
 
 [build]
@@ -18,5 +18,6 @@ primary_region = 'jnb'
 
 [[vm]]
   memory = '1gb'
+  cpu_kind = 'shared'
   cpus = 1
   memory_mb = 1024
