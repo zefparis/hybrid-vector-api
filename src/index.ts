@@ -97,8 +97,9 @@ app.use(enrollRouter);
 // EDGUARD endpoints are protected by EDGUARD tenants keys (edguard_tenants table)
 // NOTE: Explicit OPTIONS bypass for /edguard/* so browser preflight is never blocked
 // by edguardApiKeyMiddleware.
-// Express v5 uses path-to-regexp v6, where `*` must be named (e.g. :path(*)).
-app.options('/edguard/:path(*)', (req: Request, res: Response) => {
+// Express v5 uses path-to-regexp v6, and wildcard patterns can be tricky.
+// Using a RegExp avoids path-to-regexp parsing issues and matches any /edguard/* preflight.
+app.options(/^\/edguard\//, (req: Request, res: Response) => {
   const origin = req.headers.origin;
 
   if (origin && isOriginAllowed(origin)) {
