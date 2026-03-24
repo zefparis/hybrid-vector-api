@@ -21,6 +21,11 @@ const STATIC_ALLOWED_ORIGINS: readonly string[] = [
   'https://www.hybrid-vector.com',
   'http://localhost:5173',
   'http://localhost:3000',
+  'http://localhost:3001',
+  'http://localhost:3002',
+  'http://localhost:3003',
+  'http://localhost:3004',
+  'http://localhost:3005',
 ];
 
 function buildAllowedOrigins(): Set<string> {
@@ -45,14 +50,15 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   if (origin && isOriginAllowed(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
   }
 
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,X-API-Key,Authorization');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-API-Key,X-HV-API-Key,X-Tenant-ID');
   res.setHeader('Access-Control-Max-Age', '86400');
 
   if (req.method === 'OPTIONS') {
-    res.sendStatus(204);
+    res.status(204).end();
     return;
   }
 
@@ -114,3 +120,5 @@ bootstrap().catch((error) => {
 });
 
 export default app;
+
+
