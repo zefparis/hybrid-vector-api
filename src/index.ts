@@ -95,6 +95,25 @@ app.use(sessionRouter);
 app.use(enrollRouter);
 
 // EDGUARD endpoints are protected by EDGUARD tenants keys (edguard_tenants table)
+// NOTE: Explicit OPTIONS bypass for /edguard/* so browser preflight is never blocked
+// by edguardApiKeyMiddleware.
+app.options('/edguard/*', (req: Request, res: Response) => {
+  const origin = req.headers.origin;
+
+  if (origin && isOriginAllowed(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      'Content-Type,Authorization,X-API-Key,X-HV-API-Key,X-Tenant-ID',
+    );
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Vary', 'Origin');
+  }
+
+  res.status(204).end();
+});
+
 app.use('/edguard', edguardApiKeyMiddleware, edguardRouter);
 
 app.use(errorHandler);
