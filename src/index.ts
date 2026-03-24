@@ -7,6 +7,7 @@ import healthRouter from './routes/health';
 import sessionRouter from './routes/session';
 import enrollRouter from './routes/enroll';
 import edguardRouter from './routes/edguard';
+import adminRouter from './routes/admin';
 import { ensureCollectionExists } from './services/rekognitionService';
 
 const app: Express = express();
@@ -83,6 +84,9 @@ app.get('/', (_req: Request, res: Response): void => {
 });
 
 app.use(healthRouter);
+
+// Admin endpoints (read-only Supabase queries)
+app.use('/admin', adminRouter);
 
 // HV core endpoints are protected by the main HV API key middleware
 // IMPORTANT: scope it ONLY to /auth/* so it doesn't block /edguard/*
