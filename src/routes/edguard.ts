@@ -440,6 +440,27 @@ router.post(
       const searchResult = await searchFaceByImage(clean_b64);
       if (!searchResult) {
         logVerifyStep('no rekognition match');
+
+        // Fire-and-forget: insert failed verification into edguard_sessions
+        if (supabase) {
+          supabase
+            .from('edguard_sessions')
+            .insert({
+              tenant_id,
+              enrollment_id: null,
+              student_id: null,
+              first_name,
+              last_name,
+              result: 'no_match',
+              similarity_score: 0,
+              created_at: new Date().toISOString(),
+            })
+            .then(
+              ({ error: insertErr }) => { if (insertErr) console.error('[EDGUARD] session insert failed:', insertErr.message); },
+              () => {}
+            );
+        }
+
         res.json({ verified: false, similarity: 0 });
         return;
       }
@@ -455,6 +476,27 @@ router.post(
           face_id: searchResult.faceId,
           similarity: searchResult.similarity,
         });
+
+        // Fire-and-forget: insert failed verification into edguard_sessions
+        if (supabase) {
+          supabase
+            .from('edguard_sessions')
+            .insert({
+              tenant_id,
+              enrollment_id: null,
+              student_id: null,
+              first_name,
+              last_name,
+              result: 'no_match',
+              similarity_score: searchResult.similarity,
+              created_at: new Date().toISOString(),
+            })
+            .then(
+              ({ error: insertErr }) => { if (insertErr) console.error('[EDGUARD] session insert failed:', insertErr.message); },
+              () => {}
+            );
+        }
+
         sendApiError(res, 404, 'ENROLLMENT_NOT_FOUND', 'Enrollment not found for matched face');
         return;
       }
@@ -465,6 +507,26 @@ router.post(
         student_id: enrollment.student_id,
         first_name: enrollment.first_name,
       });
+
+      // Fire-and-forget: insert into edguard_sessions
+      if (supabase) {
+        supabase
+          .from('edguard_sessions')
+          .insert({
+            tenant_id,
+            enrollment_id: enrollment.student_id,
+            student_id: enrollment.student_id,
+            first_name,
+            last_name,
+            result: searchResult.similarity >= 80 ? 'match' : 'no_match',
+            similarity_score: searchResult.similarity,
+            created_at: new Date().toISOString(),
+          })
+          .then(
+            ({ error: insertErr }) => { if (insertErr) console.error('[EDGUARD] session insert failed:', insertErr.message); },
+            () => {}
+          );
+      }
 
       res.json({
         verified: true,
