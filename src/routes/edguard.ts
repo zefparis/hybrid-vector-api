@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from 'crypto';
+ import { Buffer } from 'node:buffer';
 import { NextFunction, Request, Response, Router } from 'express';
 import { z } from 'zod';
 import { cleanBase64, enrollFace, searchFaceByImage, verifyFace } from '../services/rekognitionService';
@@ -263,7 +264,8 @@ async function verifyEnrollmentFace(
     throw new AppError(500, 'STORED_FACE_ID_MISSING', 'Stored Rekognition face id is missing');
   }
 
-  const liveResult = await verifyFace(faceB64, enrollment.rekognition_face_id);
+  const faceBytes = Buffer.from(cleanBase64(faceB64), 'base64');
+  const liveResult = await verifyFace(faceBytes, enrollment.rekognition_face_id);
   const similarity = liveResult.similarity;
   const verified = liveResult.matched;
 
@@ -342,7 +344,8 @@ router.post(
       const clean_b64 = cleanBase64(selfie_b64);
       logEnrollStep('cleaned base64', { length: clean_b64.length });
 
-      const enrollmentFace = await enrollFace(clean_b64, student_id);
+      const selfieBytes = Buffer.from(clean_b64, 'base64');
+      const enrollmentFace = await enrollFace(selfieBytes, student_id);
       logEnrollStep('rekognition index complete', {
         has_face_id: Boolean(enrollmentFace?.faceId),
         confidence: enrollmentFace?.confidence ?? 0,
@@ -437,7 +440,8 @@ router.post(
       const clean_b64 = cleanBase64(selfie_b64);
       logVerifyStep('cleaned base64', { length: clean_b64.length });
 
-      const searchResult = await searchFaceByImage(clean_b64);
+      const selfieBytes = Buffer.from(clean_b64, 'base64');
+      const searchResult = await searchFaceByImage(selfieBytes);
       if (!searchResult) {
         logVerifyStep('no rekognition match');
 

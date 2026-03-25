@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
+ import { Buffer } from 'node:buffer';
 import { z } from 'zod';
-import { enrollFace } from '../services/rekognitionService';
+import { cleanBase64, enrollFace } from '../services/rekognitionService';
 import { AppError, EnrollResponse, EnrolledUser } from '../types';
 
 const router = Router();
@@ -20,7 +21,8 @@ router.post(
       const validatedBody = enrollRequestSchema.parse(req.body);
       const { tenant_id, user_id, face_image_b64 } = validatedBody;
 
-      const enrollment = await enrollFace(face_image_b64, user_id);
+      const faceBytes = Buffer.from(cleanBase64(face_image_b64), 'base64');
+      const enrollment = await enrollFace(faceBytes, user_id);
 
       if (!enrollment) {
         throw new AppError(422, 'NO_FACE_DETECTED', 'No face detected in the provided image');

@@ -125,7 +125,7 @@ const PORT = config.PORT;
 async function bootstrap(): Promise<void> {
   try {
     await ensureCollectionExists();
-    console.log('[REKOGNITION] region:', process.env.AWS_REGION || 'eu-central-1');
+    console.log('[REKOGNITION] region:', process.env.AWS_REGION || 'eu-west-1');
     console.log('[REKOGNITION] key:', `${process.env.AWS_ACCESS_KEY_ID?.slice(0, 8) ?? ''}...`);
   } catch (error) {
     console.error('[BOOTSTRAP] Rekognition setup failed:', error);
