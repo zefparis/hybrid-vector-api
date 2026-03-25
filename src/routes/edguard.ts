@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { cleanBase64, enrollFace, searchFaceByImage, verifyFace } from '../services/rekognitionService';
 import { supabase } from '../services/supabaseService';
 import { AppError } from '../types';
+import { config } from '../config';
 
 type CognitiveBaseline = {
   stroop_score: number;
@@ -471,6 +472,37 @@ router.post(
         student_id: enrollment.student_id,
         first_name: enrollment.first_name ?? '',
       });
+
+      // Fire-and-forget: push verification event to HCS-U7 dashboard
+      if (config.HCS_INGEST_URL && config.HCS_WORKER_SHARED_SECRET) {
+        const ingestUrl = config.HCS_INGEST_URL;
+        const secret = config.HCS_WORKER_SHARED_SECRET;
+        const result = searchResult.similarity >= 80 ? 'match' : 'no_match';
+
+        setImmediate(() => {
+          fetch(ingestUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Worker-Auth': secret,
+              'X-HCS-Worker-Auth': secret,
+            },
+            body: JSON.stringify({
+              tenant_id,
+              event: 'verification',
+              result,
+              guard_type: 'edguard',
+              timestamp: Date.now(),
+              metadata: {
+                student_id: enrollment.student_id,
+                similarity: searchResult.similarity,
+                first_name: enrollment.first_name,
+                last_name: enrollment.last_name,
+              },
+            }),
+          }).catch(() => {}); // Silent — never block, never throw
+        });
+      }
     } catch (error) {
       next(error);
     }
