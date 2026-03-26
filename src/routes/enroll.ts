@@ -22,7 +22,7 @@ router.post(
       const { tenant_id, user_id, face_image_b64 } = validatedBody;
 
       const faceBytes = Buffer.from(cleanBase64(face_image_b64), 'base64');
-      const enrollment = await enrollFace(faceBytes, user_id);
+      const enrollment = await enrollFace(faceBytes, user_id, tenant_id);
 
       if (!enrollment) {
         throw new AppError(422, 'NO_FACE_DETECTED', 'No face detected in the provided image');

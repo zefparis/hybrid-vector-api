@@ -8,9 +8,28 @@ import {
   SearchFacesByImageCommand,
 } from '@aws-sdk/client-rekognition';
 
-const COLLECTION_ID = 'edguard-enrollments';
- const DEFAULT_AWS_REGION = 'eu-west-1';
- const REKOGNITION_TIMEOUT_MS = 4_500;
+const DEFAULT_AWS_REGION = 'eu-west-1';
+const REKOGNITION_TIMEOUT_MS = 4_500;
+
+// Legacy fallback: this env var used to define a single, global collection.
+// It can be removed from Fly.io secrets later once all deployments use tenant-scoped collections.
+const LEGACY_COLLECTION_ID_FALLBACK = process.env.REKOGNITION_COLLECTION_ID || 'edguard-enrollments';
+
+export function getCollectionId(tenantId: string): string {
+  // Normalise: 'edguard-demo' -> 'edguard-enrollments'
+  //            'payguard-demo' -> 'payguard-enrollments'
+  // Keep a safe fallback for unexpected tenant ids.
+  if (!tenantId || typeof tenantId !== 'string') {
+    return LEGACY_COLLECTION_ID_FALLBACK;
+  }
+
+  const prefix = tenantId.replace(/-demo$/i, '');
+  if (!prefix) {
+    return LEGACY_COLLECTION_ID_FALLBACK;
+  }
+
+  return `${prefix}-enrollments`;
+}
 
 const client = new RekognitionClient({
   region: process.env.AWS_REGION || DEFAULT_AWS_REGION,
@@ -56,14 +75,29 @@ async function sendRekognitionCommand<T>(
 }
 
 export async function ensureCollectionExists(): Promise<void> {
+  const TENANTS = [
+    'edguard-demo',
+    'workguard-demo',
+    'payguard-demo',
+    'accessguard-demo',
+    'signguard-demo',
+  ];
+
+  for (const tenantId of TENANTS) {
+    await ensureCollectionForTenant(tenantId);
+  }
+}
+
+async function ensureCollectionForTenant(tenantId: string): Promise<void> {
+  const collectionId = getCollectionId(tenantId);
   try {
     await sendRekognitionCommand(
       'DescribeCollection',
       new DescribeCollectionCommand({
-        CollectionId: COLLECTION_ID,
+        CollectionId: collectionId,
       })
     );
-    console.log('[REKOGNITION] collection exists:', COLLECTION_ID);
+    console.log('[REKOGNITION] collection exists:', collectionId);
   } catch (error) {
     const err = error as { name?: string };
 
@@ -74,23 +108,25 @@ export async function ensureCollectionExists(): Promise<void> {
     const response = await sendRekognitionCommand<{ StatusCode?: number }>(
       'CreateCollection',
       new CreateCollectionCommand({
-        CollectionId: COLLECTION_ID,
+        CollectionId: collectionId,
       })
     );
 
-    console.log('[REKOGNITION] collection created:', COLLECTION_ID, 'status:', response.StatusCode ?? 'unknown');
+    console.log('[REKOGNITION] collection created:', collectionId, 'status:', response.StatusCode ?? 'unknown');
   }
 }
 
 export async function enrollFace(
   imageBase64: string | Buffer,
   externalImageId: string,
+  tenantId: string,
 ): Promise<{ faceId: string; confidence: number } | null> {
   const imageBytes = getImageBytes(imageBase64);
+  const collectionId = getCollectionId(tenantId);
   const response = await sendRekognitionCommand<{ FaceRecords?: Array<{ Face?: { FaceId?: string; Confidence?: number } }> }>(
     'IndexFaces',
     new IndexFacesCommand({
-      CollectionId: COLLECTION_ID,
+      CollectionId: collectionId,
       Image: { Bytes: imageBytes },
       ExternalImageId: externalImageId,
       DetectionAttributes: ['DEFAULT'],
@@ -116,12 +152,14 @@ export async function enrollFace(
 
 export async function searchFaceByImage(
   imageBase64: string | Buffer,
+  tenantId: string,
 ): Promise<{ faceId: string; similarity: number } | null> {
   const imageBytes = getImageBytes(imageBase64);
+  const collectionId = getCollectionId(tenantId);
   const response = await sendRekognitionCommand<{ FaceMatches?: Array<{ Similarity?: number; Face?: { FaceId?: string } }> }>(
     'SearchFacesByImage',
     new SearchFacesByImageCommand({
-      CollectionId: COLLECTION_ID,
+      CollectionId: collectionId,
       Image: { Bytes: imageBytes },
       MaxFaces: 1,
       FaceMatchThreshold: 70,
@@ -146,9 +184,10 @@ export async function searchFaceByImage(
 
 export async function verifyFace(
   imageBase64: string | Buffer,
-  expectedFaceId: string
+  expectedFaceId: string,
+  tenantId: string,
 ): Promise<{ matched: boolean; similarity: number; faceId: string }> {
-  const result = await searchFaceByImage(imageBase64);
+  const result = await searchFaceByImage(imageBase64, tenantId);
 
   if (!result) {
     return { matched: false, similarity: 0, faceId: '' };
@@ -170,7 +209,9 @@ export async function deleteFace(faceId: string): Promise<boolean> {
     await sendRekognitionCommand(
       'DeleteFaces',
       new DeleteFacesCommand({
-        CollectionId: COLLECTION_ID,
+        // Backward-compat: delete still targets the legacy collection.
+        // If we need tenant-scoped deletes later, we can add tenantId as a parameter.
+        CollectionId: LEGACY_COLLECTION_ID_FALLBACK,
         FaceIds: [faceId],
       })
     );

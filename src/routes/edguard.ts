@@ -302,7 +302,7 @@ async function verifyEnrollmentFace(
   }
 
   const faceBytes = Buffer.from(cleanBase64(faceB64), 'base64');
-  const liveResult = await verifyFace(faceBytes, enrollment.rekognition_face_id);
+  const liveResult = await verifyFace(faceBytes, enrollment.rekognition_face_id, tenantId);
   const similarity = liveResult.similarity;
   const verified = liveResult.matched;
 
@@ -399,7 +399,7 @@ router.post(
       logEnrollStep('cleaned base64', { length: clean_b64.length });
 
       const selfieBytes = await compressImageForRekognition(clean_b64);
-      const enrollmentFace = await enrollFace(selfieBytes, student_id);
+      const enrollmentFace = await enrollFace(selfieBytes, student_id, resolvedTenantId);
       logEnrollStep('rekognition index complete', {
         has_face_id: Boolean(enrollmentFace?.faceId),
         confidence: enrollmentFace?.confidence ?? 0,
@@ -528,7 +528,7 @@ router.post(
 
       if (searchResult === null) {
         const selfieBytes = await compressImageForRekognition(clean_b64);
-        searchResult = await searchFaceByImage(selfieBytes);
+        searchResult = await searchFaceByImage(selfieBytes, resolvedTenantId);
 
         // Store only on match
         if (searchResult !== null) {
