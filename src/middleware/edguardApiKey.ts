@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { supabase } from '../services/supabaseService';
 import { AppError } from '../types';
+import { cachedGet } from '../lib/cache';
 
 type EdguardTenantRow = {
   tenant_id: string;
@@ -40,18 +41,29 @@ export async function edguardApiKeyMiddleware(
     return;
   }
 
-  const { data, error } = await supabase
-    .from('edguard_tenants')
-    .select('tenant_id')
-    .eq('api_key', apiKey)
-    .maybeSingle();
+  let tenant: EdguardTenantRow | null = null;
+  try {
+    tenant = await cachedGet<EdguardTenantRow | null>(
+      `edguard-tenant-by-key:${apiKey}`,
+      async () => {
+        const { data, error } = await supabase!
+          .from('edguard_tenants')
+          .select('tenant_id')
+          .eq('api_key', apiKey)
+          .maybeSingle();
 
-  if (error) {
-    next(new AppError(500, 'SUPABASE_QUERY_FAILED', error.message));
+        if (error) {
+          throw new AppError(500, 'SUPABASE_QUERY_FAILED', error.message);
+        }
+
+        return (data as EdguardTenantRow | null) ?? null;
+      },
+      300
+    );
+  } catch (e) {
+    next(e);
     return;
   }
-
-  const tenant = (data as EdguardTenantRow | null) ?? null;
   console.log('[EDGUARD-AUTH] tenant found:', tenant?.tenant_id);
 
   if (!tenant?.tenant_id) {

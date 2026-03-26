@@ -6,6 +6,7 @@ import { cleanBase64, enrollFace, searchFaceByImage, verifyFace } from '../servi
 import { supabase } from '../services/supabaseService';
 import { AppError } from '../types';
 import { config } from '../config';
+import { cachedGet, invalidateCache } from '../lib/cache';
 
 type CognitiveBaseline = {
   stroop_score: number;
@@ -146,18 +147,24 @@ async function fetchEnrollmentByFaceId(
   rekognitionFaceId: string,
 ): Promise<Pick<EdguardEnrollmentRow, 'student_id' | 'first_name' | 'last_name' | 'rekognition_face_id'> | null> {
   const client = getSupabaseClient();
-  const { data, error } = await client
-    .from('edguard_enrollments')
-    .select('student_id, first_name, last_name, rekognition_face_id')
-    .eq('tenant_id', tenantId)
-    .eq('rekognition_face_id', rekognitionFaceId)
-    .maybeSingle();
+  return cachedGet(
+    `edguard-enrollment-by-face:${tenantId}:${rekognitionFaceId}`,
+    async () => {
+      const { data, error } = await client
+        .from('edguard_enrollments')
+        .select('student_id, first_name, last_name, rekognition_face_id')
+        .eq('tenant_id', tenantId)
+        .eq('rekognition_face_id', rekognitionFaceId)
+        .maybeSingle();
 
-  if (error) {
-    throw new AppError(500, 'SUPABASE_QUERY_FAILED', error.message);
-  }
+      if (error) {
+        throw new AppError(500, 'SUPABASE_QUERY_FAILED', error.message);
+      }
 
-  return (data as Pick<EdguardEnrollmentRow, 'student_id' | 'first_name' | 'last_name' | 'rekognition_face_id'> | null) ?? null;
+      return (data as Pick<EdguardEnrollmentRow, 'student_id' | 'first_name' | 'last_name' | 'rekognition_face_id'> | null) ?? null;
+    },
+    60
+  );
 }
 
 function isCognitiveBaseline(value: unknown): value is CognitiveBaseline {
@@ -196,18 +203,24 @@ function parseCognitiveBaseline(value: unknown): CognitiveBaseline | null {
 
 async function fetchEnrollment(tenantId: string, studentId: string): Promise<EdguardEnrollmentRow | null> {
   const client = getSupabaseClient();
-  const { data, error } = await client
-    .from('edguard_enrollments')
-    .select('*')
-    .eq('tenant_id', tenantId)
-    .eq('student_id', studentId)
-    .maybeSingle();
+  return cachedGet(
+    `edguard-enrollment:${tenantId}:${studentId}`,
+    async () => {
+      const { data, error } = await client
+        .from('edguard_enrollments')
+        .select('*')
+        .eq('tenant_id', tenantId)
+        .eq('student_id', studentId)
+        .maybeSingle();
 
-  if (error) {
-    throw new AppError(500, 'SUPABASE_QUERY_FAILED', error.message);
-  }
+      if (error) {
+        throw new AppError(500, 'SUPABASE_QUERY_FAILED', error.message);
+      }
 
-  return (data as EdguardEnrollmentRow | null) ?? null;
+      return (data as EdguardEnrollmentRow | null) ?? null;
+    },
+    60
+  );
 }
 
 async function lookupEnrollmentByName(
@@ -219,20 +232,26 @@ async function lookupEnrollmentByName(
   const normalizedFirstName = firstName.trim();
   const normalizedLastName = lastName.trim();
 
-  const { data, error } = await client
-    .from('edguard_enrollments')
-    .select('student_id, first_name, last_name')
-    .eq('tenant_id', tenantId)
-    .filter('first_name', 'ilike', normalizedFirstName)
-    .filter('last_name', 'ilike', normalizedLastName)
-    .limit(1)
-    .maybeSingle();
+  return cachedGet(
+    `edguard-enrollment-by-name:${tenantId}:${normalizedFirstName.toLowerCase()}:${normalizedLastName.toLowerCase()}`,
+    async () => {
+      const { data, error } = await client
+        .from('edguard_enrollments')
+        .select('student_id, first_name, last_name')
+        .eq('tenant_id', tenantId)
+        .filter('first_name', 'ilike', normalizedFirstName)
+        .filter('last_name', 'ilike', normalizedLastName)
+        .limit(1)
+        .maybeSingle();
 
-  if (error) {
-    throw new AppError(500, 'SUPABASE_QUERY_FAILED', error.message);
-  }
+      if (error) {
+        throw new AppError(500, 'SUPABASE_QUERY_FAILED', error.message);
+      }
 
-  return (data as Pick<EdguardEnrollmentRow, 'student_id' | 'first_name' | 'last_name'> | null) ?? null;
+      return (data as Pick<EdguardEnrollmentRow, 'student_id' | 'first_name' | 'last_name'> | null) ?? null;
+    },
+    60
+  );
 }
 
 async function incrementVerifiedCount(tenantId: string, studentId: string, currentCount: number): Promise<void> {
@@ -246,6 +265,9 @@ async function incrementVerifiedCount(tenantId: string, studentId: string, curre
   if (error) {
     throw new AppError(500, 'SUPABASE_UPDATE_FAILED', error.message);
   }
+
+  // Invalidation best-effort
+  await invalidateCache(`edguard-enrollment:${tenantId}:${studentId}`);
 }
 
 async function verifyEnrollmentFace(
@@ -383,6 +405,9 @@ router.post(
         console.error('[ENROLL] step:', 'supabase insert failed', insertError.message);
         throw new AppError(500, 'SUPABASE_INSERT_FAILED', insertError.message);
       }
+
+      // Invalidate any possible cached lookups for this student (best-effort)
+      await invalidateCache(`edguard-enrollment:${tenant_id}:${student_id}`);
 
       logEnrollStep('supabase insert complete', {
         student_id,
