@@ -20,14 +20,16 @@ const STATIC_ALLOWED_ORIGINS: readonly string[] = [
   'https://hybrid-vector-frontend.vercel.app',
   'https://hybrid-vector.com',
   'https://www.hybrid-vector.com',
+  'https://localhost',        // ← Capacitor Android
+  'capacitor://localhost',    // ← Capacitor iOS
   'http://localhost:5173',
   'http://localhost:3000',
   'http://localhost:3001',
   'http://localhost:3002',
-  'http://localhost:3003',
   'http://localhost:3004',
   'http://localhost:3005',
-];
+  
+]
 
 function buildAllowedOrigins(): Set<string> {
   const set = new Set<string>(STATIC_ALLOWED_ORIGINS);
