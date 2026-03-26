@@ -88,17 +88,12 @@ app.use(healthRouter);
 // Admin endpoints (read-only Supabase queries)
 app.use('/admin', adminRouter);
 
-// HV core endpoints are protected by the main HV API key middleware
-// IMPORTANT: scope it ONLY to /auth/* so it doesn't block /edguard/*
+// HV core endpoints — protected by main HV API key
 app.use('/auth', apiKeyMiddleware);
 app.use(sessionRouter);
 app.use(enrollRouter);
 
-// EDGUARD endpoints are protected by EDGUARD tenants keys (edguard_tenants table)
-// NOTE: Explicit OPTIONS bypass for /edguard/* so browser preflight is never blocked
-// by edguardApiKeyMiddleware.
-// Express v5 uses path-to-regexp v6, and wildcard patterns can be tricky.
-// Using a RegExp avoids path-to-regexp parsing issues and matches any /edguard/* preflight.
+// EDGUARD — OPTIONS bypass for preflight
 app.options(/^\/edguard\//, (req: Request, res: Response) => {
   const origin = req.headers.origin;
 
@@ -120,9 +115,19 @@ app.use('/edguard', edguardApiKeyMiddleware, edguardRouter);
 
 app.use(errorHandler);
 
+// ─── BOOTSTRAP ───────────────────────────────────────────────────────────────
+
 const PORT = config.PORT;
 
 async function bootstrap(): Promise<void> {
+  // ✅ Écouter immédiatement — Fly.io peut router dès le démarrage
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 hv-api running on port ${PORT}`);
+    console.log(`📍 Environment: ${config.NODE_ENV}`);
+    console.log(`📡 Listening on 0.0.0.0:${PORT}`);
+  });
+
+  // ✅ Rekognition init après — non bloquant
   try {
     await ensureCollectionExists();
     console.log('[REKOGNITION] region:', process.env.AWS_REGION || 'eu-west-1');
@@ -131,12 +136,6 @@ async function bootstrap(): Promise<void> {
     console.error('[BOOTSTRAP] Rekognition setup failed:', error);
     console.log('[BOOTSTRAP] Continuing without Rekognition...');
   }
-
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 hv-api running on port ${PORT}`);
-    console.log(`📍 Environment: ${config.NODE_ENV}`);
-    console.log(`📡 Listening on 0.0.0.0:${PORT}`);
-  });
 }
 
 bootstrap().catch((error) => {
@@ -145,5 +144,3 @@ bootstrap().catch((error) => {
 });
 
 export default app;
-
-

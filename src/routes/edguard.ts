@@ -1,5 +1,5 @@
-import { randomBytes, randomUUID } from 'crypto';
- import { Buffer } from 'node:buffer';
+import { createHash, randomBytes, randomUUID } from 'crypto';
+import { Buffer } from 'node:buffer';
 import { NextFunction, Request, Response, Router } from 'express';
 import { z } from 'zod';
 import { cleanBase64, enrollFace, searchFaceByImage, verifyFace } from '../services/rekognitionService';
@@ -7,6 +7,8 @@ import { supabase } from '../services/supabaseService';
 import { AppError } from '../types';
 import { config } from '../config';
 import { cachedGet, invalidateCache } from '../lib/cache';
+import { redis } from '../lib/redis';
+import { compressImageForRekognition } from '../lib/imageUtils';
 
 type CognitiveBaseline = {
   stroop_score: number;
@@ -53,6 +55,11 @@ interface VerificationResult {
   liveness_score: number;
   identity_confidence: number;
 }
+
+type RekognitionSearchResult = {
+  faceId: string;
+  similarity: number;
+} | null;
 
 const SESSION_SIMILARITY_THRESHOLD = 80;
 
@@ -163,7 +170,7 @@ async function fetchEnrollmentByFaceId(
 
       return (data as Pick<EdguardEnrollmentRow, 'student_id' | 'first_name' | 'last_name' | 'rekognition_face_id'> | null) ?? null;
     },
-    60
+    300
   );
 }
 
@@ -254,7 +261,12 @@ async function lookupEnrollmentByName(
   );
 }
 
-async function incrementVerifiedCount(tenantId: string, studentId: string, currentCount: number): Promise<void> {
+async function incrementVerifiedCount(
+  tenantId: string,
+  studentId: string,
+  currentCount: number,
+  rekognitionFaceId?: string | null
+): Promise<void> {
   const client = getSupabaseClient();
   const { error } = await client
     .from('edguard_enrollments')
@@ -268,6 +280,9 @@ async function incrementVerifiedCount(tenantId: string, studentId: string, curre
 
   // Invalidation best-effort
   await invalidateCache(`edguard-enrollment:${tenantId}:${studentId}`);
+  if (rekognitionFaceId) {
+    await invalidateCache(`edguard-enrollment-by-face:${tenantId}:${rekognitionFaceId}`);
+  }
 }
 
 async function verifyEnrollmentFace(
@@ -300,7 +315,12 @@ async function verifyEnrollmentFace(
   const identityConfidence = similarity / 100;
 
   if (verified) {
-    await incrementVerifiedCount(tenantId, studentId, enrollment.verified_count ?? 0);
+    await incrementVerifiedCount(
+      tenantId,
+      studentId,
+      enrollment.verified_count ?? 0,
+      enrollment.rekognition_face_id
+    );
   }
 
   return {
@@ -366,7 +386,7 @@ router.post(
       const clean_b64 = cleanBase64(selfie_b64);
       logEnrollStep('cleaned base64', { length: clean_b64.length });
 
-      const selfieBytes = Buffer.from(clean_b64, 'base64');
+      const selfieBytes = await compressImageForRekognition(clean_b64);
       const enrollmentFace = await enrollFace(selfieBytes, student_id);
       logEnrollStep('rekognition index complete', {
         has_face_id: Boolean(enrollmentFace?.faceId),
@@ -465,8 +485,36 @@ router.post(
       const clean_b64 = cleanBase64(selfie_b64);
       logVerifyStep('cleaned base64', { length: clean_b64.length });
 
-      const selfieBytes = Buffer.from(clean_b64, 'base64');
-      const searchResult = await searchFaceByImage(selfieBytes);
+      // Redis cache (max 120s) sur le match Rekognition brut (PAS la décision finale)
+      // Important: ne jamais cacher un "no match" → si null, on ne set pas Redis.
+      const imageHash = createHash('sha256').update(clean_b64).digest('hex').slice(0, 32);
+      const cacheKey = `rekognition:search:${tenant_id}:${imageHash}`;
+
+      let searchResult: RekognitionSearchResult = null;
+      try {
+        const cached = await redis.get<RekognitionSearchResult>(cacheKey);
+        const hit = cached !== null;
+        console.log(`[cache] ${hit ? 'HIT' : 'MISS'} ${cacheKey}`);
+        if (hit) {
+          searchResult = cached;
+        }
+      } catch {
+        // Silent: si Redis down → fallback Rekognition direct
+      }
+
+      if (searchResult === null) {
+        const selfieBytes = await compressImageForRekognition(clean_b64);
+        searchResult = await searchFaceByImage(selfieBytes);
+
+        // Store only on match
+        if (searchResult !== null) {
+          try {
+            await redis.set(cacheKey, searchResult, { ex: 120 });
+          } catch {
+            // Silent
+          }
+        }
+      }
       if (!searchResult) {
         logVerifyStep('no rekognition match');
 
@@ -494,16 +542,19 @@ router.post(
         return;
       }
 
+      // Narrow type for TS (searchResult is non-null from here)
+      const match = searchResult;
+
       logVerifyStep('rekognition match found', {
-        face_id: searchResult.faceId,
-        similarity: searchResult.similarity,
+        face_id: match.faceId,
+        similarity: match.similarity,
       });
 
-      const enrollment = await fetchEnrollmentByFaceId(tenant_id, searchResult.faceId);
+      const enrollment = await fetchEnrollmentByFaceId(tenant_id, match.faceId);
       if (!enrollment) {
         logVerifyStep('supabase enrollment not found for face', {
-          face_id: searchResult.faceId,
-          similarity: searchResult.similarity,
+          face_id: match.faceId,
+          similarity: match.similarity,
         });
 
         // Fire-and-forget: insert failed verification into edguard_sessions
@@ -517,7 +568,7 @@ router.post(
               first_name,
               last_name,
               result: 'no_match',
-              similarity_score: searchResult.similarity,
+              similarity_score: match.similarity,
               created_at: new Date().toISOString(),
             })
             .then(
@@ -531,8 +582,8 @@ router.post(
       }
 
       logVerifyStep('verification success', {
-        face_id: searchResult.faceId,
-        similarity: searchResult.similarity,
+        face_id: match.faceId,
+        similarity: match.similarity,
         student_id: enrollment.student_id,
         first_name: enrollment.first_name,
       });
@@ -547,8 +598,8 @@ router.post(
             student_id: enrollment.student_id,
             first_name,
             last_name,
-            result: searchResult.similarity >= 80 ? 'match' : 'no_match',
-            similarity_score: searchResult.similarity,
+            result: match.similarity >= 80 ? 'match' : 'no_match',
+            similarity_score: match.similarity,
             created_at: new Date().toISOString(),
           })
           .then(
@@ -559,7 +610,7 @@ router.post(
 
       res.json({
         verified: true,
-        similarity: searchResult.similarity,
+        similarity: match.similarity,
         student_id: enrollment.student_id,
         first_name: enrollment.first_name ?? '',
       });
@@ -568,7 +619,7 @@ router.post(
       if (config.HCS_INGEST_URL && config.HCS_WORKER_SHARED_SECRET) {
         const ingestUrl = config.HCS_INGEST_URL;
         const secret = config.HCS_WORKER_SHARED_SECRET;
-        const result = searchResult.similarity >= 80 ? 'match' : 'no_match';
+        const result = match.similarity >= 80 ? 'match' : 'no_match';
 
         setImmediate(() => {
           fetch(ingestUrl, {
@@ -586,7 +637,7 @@ router.post(
               timestamp: Date.now(),
               metadata: {
                 student_id: enrollment.student_id,
-                similarity: searchResult.similarity,
+                similarity: match.similarity,
                 first_name: enrollment.first_name,
                 last_name: enrollment.last_name,
               },
