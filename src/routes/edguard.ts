@@ -378,7 +378,19 @@ router.post(
         tenant_id,
       } = validatedBody;
 
-      logEnrollStep('received body', { tenant_id, first_name, last_name, has_email: Boolean(email) });
+      const resolvedTenantId = req.tenant_id ?? tenant_id;
+
+      if (req.tenant_id && req.tenant_id !== tenant_id) {
+        sendApiError(
+          res,
+          403,
+          'TENANT_MISMATCH',
+          'tenant_id does not match the API key'
+        );
+        return;
+      }
+
+      logEnrollStep('received body', { tenant_id: resolvedTenantId, first_name, last_name, has_email: Boolean(email) });
 
       const student_id = ulid();
       logEnrollStep('generated student_id', { student_id });
@@ -403,11 +415,11 @@ router.post(
       const enrolledAt = new Date().toISOString();
       const enrollmentRow = {
         student_id,
-        institution_id: tenant_id,
+        institution_id: resolvedTenantId,
         first_name,
         last_name,
         email: email ?? null,
-        tenant_id,
+        tenant_id: resolvedTenantId,
         rekognition_face_id: enrollmentFace.faceId,
         vocal_embedding: vocalEmbedding ?? null,
         vocal_quality: vocalQuality ?? null,
@@ -427,11 +439,11 @@ router.post(
       }
 
       // Invalidate any possible cached lookups for this student (best-effort)
-      await invalidateCache(`edguard-enrollment:${tenant_id}:${student_id}`);
+      await invalidateCache(`edguard-enrollment:${resolvedTenantId}:${student_id}`);
 
       logEnrollStep('supabase insert complete', {
         student_id,
-        institution_id: tenant_id,
+        institution_id: resolvedTenantId,
         face_id: enrollmentFace.faceId,
         enrolled_at: enrolledAt,
       });
@@ -480,7 +492,19 @@ router.post(
       const validatedBody = verifySchema.parse(req.body);
       const { selfie_b64, first_name, last_name, tenant_id } = validatedBody;
 
-      logVerifyStep('received body', { tenant_id, first_name, last_name });
+      const resolvedTenantId = req.tenant_id ?? tenant_id;
+
+      if (req.tenant_id && req.tenant_id !== tenant_id) {
+        sendApiError(
+          res,
+          403,
+          'TENANT_MISMATCH',
+          'tenant_id does not match the API key'
+        );
+        return;
+      }
+
+      logVerifyStep('received body', { tenant_id: resolvedTenantId, first_name, last_name });
 
       const clean_b64 = cleanBase64(selfie_b64);
       logVerifyStep('cleaned base64', { length: clean_b64.length });
@@ -488,7 +512,7 @@ router.post(
       // Redis cache (max 120s) sur le match Rekognition brut (PAS la décision finale)
       // Important: ne jamais cacher un "no match" → si null, on ne set pas Redis.
       const imageHash = createHash('sha256').update(clean_b64).digest('hex').slice(0, 32);
-      const cacheKey = `rekognition:search:${tenant_id}:${imageHash}`;
+      const cacheKey = `rekognition:search:${resolvedTenantId}:${imageHash}`;
 
       let searchResult: RekognitionSearchResult = null;
       try {
@@ -523,7 +547,7 @@ router.post(
           supabase
             .from('edguard_sessions')
             .insert({
-              tenant_id,
+              tenant_id: resolvedTenantId,
               enrollment_id: null,
               student_id: null,
               first_name,
@@ -550,7 +574,7 @@ router.post(
         similarity: match.similarity,
       });
 
-      const enrollment = await fetchEnrollmentByFaceId(tenant_id, match.faceId);
+      const enrollment = await fetchEnrollmentByFaceId(resolvedTenantId, match.faceId);
       if (!enrollment) {
         logVerifyStep('supabase enrollment not found for face', {
           face_id: match.faceId,
@@ -562,7 +586,7 @@ router.post(
           supabase
             .from('edguard_sessions')
             .insert({
-              tenant_id,
+              tenant_id: resolvedTenantId,
               enrollment_id: null,
               student_id: null,
               first_name,
@@ -593,7 +617,7 @@ router.post(
         supabase
           .from('edguard_sessions')
           .insert({
-            tenant_id,
+            tenant_id: resolvedTenantId,
             enrollment_id: enrollment.student_id,
             student_id: enrollment.student_id,
             first_name,
@@ -630,7 +654,7 @@ router.post(
               'X-HCS-Worker-Auth': secret,
             },
             body: JSON.stringify({
-              tenant_id,
+              tenant_id: resolvedTenantId,
               event: 'verification',
               result,
               guard_type: 'edguard',
@@ -656,6 +680,7 @@ router.post(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const tenant_id = getTenantId(req);
+      console.log('[CHECKPOINT] tenant_id:', tenant_id);
       const validatedBody = checkpointSchema.parse(req.body);
       const { student_id, checkpoint_number, face_b64, cognitive_score, session_id } =
         validatedBody;
