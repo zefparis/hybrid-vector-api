@@ -9,6 +9,7 @@ import enrollRouter from './routes/enroll';
 import edguardRouter from './routes/edguard';
 import adminRouter from './routes/admin';
 import { ensureCollectionExists } from './services/rekognitionService';
+import { registerCtnModule } from './ctn/ctn.module';
 
 const app: Express = express();
 
@@ -114,6 +115,9 @@ app.options(/^\/edguard\//, (req: Request, res: Response) => {
 });
 
 app.use('/edguard', edguardApiKeyMiddleware, edguardRouter);
+
+// ─── CTN — Cognitive Trust Network ───────────────────────────────────────────
+registerCtnModule(app);
 
 app.use(errorHandler);
 
