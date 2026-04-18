@@ -89,4 +89,82 @@ router.get('/ctn/nodes', async (req: Request, res: Response, next: NextFunction)
   }
 });
 
+// ── Helper: resolve API key from header ──────────────────────────────────────
+function extractApiKey(req: Request): string | undefined {
+  const raw = req.headers['x-api-key'];
+  return typeof raw === 'string' ? raw : Array.isArray(raw) ? raw[0] : undefined;
+}
+
+// DELETE /ctn/node/:node_id — owner-only node deletion
+router.delete('/ctn/node/:node_id', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const apiKey = extractApiKey(req);
+    if (!apiKey) throw new AppError(401, 'MISSING_API_KEY', 'x-api-key header is required');
+
+    const { node_id } = req.params;
+
+    const client = supabase;
+    if (!client) throw new AppError(500, 'SUPABASE_NOT_CONFIGURED', 'Supabase is not configured');
+
+    // Verify ownership: the api_key must match the target node
+    const { data: node, error: fetchError } = await client
+      .from('ctn_nodes')
+      .select('id')
+      .eq('id', node_id)
+      .eq('api_key', apiKey)
+      .maybeSingle();
+
+    if (fetchError) throw new AppError(500, 'DB_QUERY_FAILED', fetchError.message);
+    if (!node) throw new AppError(403, 'FORBIDDEN', 'You do not own this node or it does not exist');
+
+    const { error: deleteError } = await client
+      .from('ctn_nodes')
+      .delete()
+      .eq('id', node_id);
+
+    if (deleteError) throw new AppError(500, 'DB_DELETE_FAILED', deleteError.message);
+
+    res.status(204).end();
+  } catch (e) {
+    next(e);
+  }
+});
+
+// DELETE /ctn/reset-test — HMH master only: purge all test nodes
+router.delete('/ctn/reset-test', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const apiKey = extractApiKey(req);
+    if (!apiKey) throw new AppError(401, 'MISSING_API_KEY', 'x-api-key header is required');
+
+    const client = supabase;
+    if (!client) throw new AppError(500, 'SUPABASE_NOT_CONFIGURED', 'Supabase is not configured');
+
+    // Verify caller is the HMH master node
+    const { data: caller, error: callerError } = await client
+      .from('ctn_nodes')
+      .select('id, institution_name')
+      .eq('api_key', apiKey)
+      .maybeSingle();
+
+    if (callerError) throw new AppError(500, 'DB_QUERY_FAILED', callerError.message);
+    if (!caller) throw new AppError(401, 'INVALID_API_KEY', 'Invalid or unrecognised API key');
+    if (caller.institution_name !== 'HMH Cognitive Trust Network') {
+      throw new AppError(403, 'FORBIDDEN', 'This endpoint is reserved for the HMH master node');
+    }
+
+    // Delete all nodes whose institution_name contains "test" (case-insensitive)
+    const { data: deleted, error: deleteError } = await client
+      .from('ctn_nodes')
+      .delete()
+      .ilike('institution_name', '%test%')
+      .select('id');
+
+    if (deleteError) throw new AppError(500, 'DB_DELETE_FAILED', deleteError.message);
+
+    res.status(200).json({ deleted: (deleted ?? []).length });
+  } catch (e) {
+    next(e);
+  }
+});
+
 export default router;
