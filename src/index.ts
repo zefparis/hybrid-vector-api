@@ -10,6 +10,8 @@ import edguardRouter from './routes/edguard';
 import adminRouter from './routes/admin';
 import playguardRouter from './routes/playguard';
 import { playguardApiKeyMiddleware } from './middleware/playguardApiKey';
+import siteguardRouter from './routes/siteguard';
+import { siteguardApiKeyMiddleware } from './middleware/siteguardApiKey';
 import { ensureCollectionExists } from './services/rekognitionService';
 import { registerCtnModule } from './ctn/ctn.module';
 
@@ -33,6 +35,8 @@ const STATIC_ALLOWED_ORIGINS: readonly string[] = [
   'http://localhost:3005',
   'http://localhost:3006',
   'http://localhost:3007',
+  'http://localhost:3008',
+  'http://localhost:3009',
 ]
 
 function buildAllowedOrigins(): Set<string> {
@@ -86,6 +90,7 @@ app.get('/', (_req: Request, res: Response): void => {
       auth: '/auth/session',
       edguard: '/edguard/*',
       playguard: '/playguard/*',
+      siteguard: '/siteguard/*',
     },
   });
 });
@@ -133,6 +138,20 @@ app.options(/^\/playguard\//, (req: Request, res: Response) => {
   res.status(204).end();
 });
 app.use('/playguard', playguardApiKeyMiddleware, playguardRouter);
+
+// ─── SITEGUARD ──────────────────────────────────────────────────────────────
+app.options(/^\/siteguard\//, (req: Request, res: Response) => {
+  const origin = req.headers.origin;
+  if (origin && isOriginAllowed(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-API-Key,X-Tenant-ID');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Vary', 'Origin');
+  }
+  res.status(204).end();
+});
+app.use('/siteguard', siteguardApiKeyMiddleware, siteguardRouter);
 
 // ─── CTN — Cognitive Trust Network ───────────────────────────────────────────
 registerCtnModule(app);

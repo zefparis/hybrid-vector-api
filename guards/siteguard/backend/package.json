@@ -1,0 +1,17 @@
+{
+  "name": "siteguard-backend",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-rekognition": "^3.0.0",
+    "@fastify/cors": "^8.0.0",
+    "@fastify/multipart": "^7.0.0",
+    "dotenv": "^16.0.0",
+    "fastify": "^4.0.0",
+    "uuid": "^9.0.0"
+  }
+}
