@@ -9,6 +9,7 @@ import enrollRouter from './routes/enroll';
 import edguardRouter from './routes/edguard';
 import adminRouter from './routes/admin';
 import playguardRouter from './routes/playguard';
+import { playguardApiKeyMiddleware } from './middleware/playguardApiKey';
 import { ensureCollectionExists } from './services/rekognitionService';
 import { registerCtnModule } from './ctn/ctn.module';
 
@@ -130,7 +131,7 @@ app.options(/^\/playguard\//, (req: Request, res: Response) => {
   }
   res.status(204).end();
 });
-app.use('/playguard', edguardApiKeyMiddleware, playguardRouter);
+app.use('/playguard', playguardApiKeyMiddleware, playguardRouter);
 
 // ─── CTN — Cognitive Trust Network ───────────────────────────────────────────
 registerCtnModule(app);
