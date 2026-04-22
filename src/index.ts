@@ -85,6 +85,7 @@ app.get('/', (_req: Request, res: Response): void => {
       health: '/health',
       auth: '/auth/session',
       edguard: '/edguard/*',
+      playguard: '/playguard/*',
     },
   });
 });
