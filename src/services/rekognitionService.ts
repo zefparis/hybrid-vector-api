@@ -3,6 +3,7 @@ import {
   CreateCollectionCommand,
   DeleteFacesCommand,
   DescribeCollectionCommand,
+  DetectFacesCommand,
   IndexFacesCommand,
   RekognitionClient,
   SearchFacesByImageCommand,
@@ -81,10 +82,32 @@ export async function ensureCollectionExists(): Promise<void> {
     'payguard-demo',
     'accessguard-demo',
     'signguard-demo',
+    'playguard-demo',
   ];
 
   for (const tenantId of TENANTS) {
     await ensureCollectionForTenant(tenantId);
+  }
+
+  // PlayGuard uses a dedicated banned collection (not the standard enrollments pattern)
+  await ensureCollectionByExactId('playguard-banned');
+}
+
+async function ensureCollectionByExactId(collectionId: string): Promise<void> {
+  try {
+    await sendRekognitionCommand(
+      'DescribeCollection',
+      new DescribeCollectionCommand({ CollectionId: collectionId })
+    );
+    console.log('[REKOGNITION] collection exists:', collectionId);
+  } catch (error) {
+    const err = error as { name?: string };
+    if (err.name !== 'ResourceNotFoundException') throw error;
+    const response = await sendRekognitionCommand<{ StatusCode?: number }>(
+      'CreateCollection',
+      new CreateCollectionCommand({ CollectionId: collectionId })
+    );
+    console.log('[REKOGNITION] collection created:', collectionId, 'status:', response.StatusCode ?? 'unknown');
   }
 }
 
@@ -198,6 +221,95 @@ export async function verifyFace(
   console.log('[REKOGNITION-VERIFY]', result.similarity, matched);
 
   return { matched, similarity: result.similarity, faceId: result.faceId };
+}
+
+export async function detectFacesForAge(
+  imageBytes: Buffer
+): Promise<{ ageRange: { Low: number; High: number } | null; confidence: number }> {
+  const response = await sendRekognitionCommand<{ FaceDetails?: Array<{ AgeRange?: { Low?: number; High?: number }; Confidence?: number }> }>(
+    'DetectFaces',
+    new DetectFacesCommand({ Image: { Bytes: imageBytes }, Attributes: ['ALL'] }),
+    imageBytes
+  );
+  const face = response.FaceDetails?.[0];
+  if (!face) return { ageRange: null, confidence: 0 };
+  return {
+    ageRange: face.AgeRange ? { Low: face.AgeRange.Low ?? 0, High: face.AgeRange.High ?? 0 } : null,
+    confidence: face.Confidence ?? 0,
+  };
+}
+
+export async function enrollFaceToCollection(
+  imageBytes: Buffer,
+  externalImageId: string,
+  collectionId: string
+): Promise<{ faceId: string; confidence: number } | null> {
+  const response = await sendRekognitionCommand<{ FaceRecords?: Array<{ Face?: { FaceId?: string; Confidence?: number } }> }>(
+    'IndexFaces',
+    new IndexFacesCommand({
+      CollectionId: collectionId,
+      Image: { Bytes: imageBytes },
+      ExternalImageId: externalImageId,
+      DetectionAttributes: ['DEFAULT'],
+      MaxFaces: 1,
+      QualityFilter: 'AUTO',
+    }),
+    imageBytes
+  );
+  const face = response.FaceRecords?.[0]?.Face as { FaceId?: string; Confidence?: number } | undefined;
+  const faceId = face?.FaceId ?? '';
+  if (!faceId) return null;
+  return { faceId, confidence: face?.Confidence ?? 0 };
+}
+
+export async function searchFaceInCollection(
+  imageBytes: Buffer,
+  collectionId: string,
+  threshold = 80
+): Promise<{ faceId: string; similarity: number; externalImageId?: string } | null> {
+  const response = await sendRekognitionCommand<{ FaceMatches?: Array<{ Similarity?: number; Face?: { FaceId?: string; ExternalImageId?: string } }> }>(
+    'SearchFacesByImage',
+    new SearchFacesByImageCommand({
+      CollectionId: collectionId,
+      Image: { Bytes: imageBytes },
+      MaxFaces: 1,
+      FaceMatchThreshold: threshold,
+      QualityFilter: 'AUTO',
+    }),
+    imageBytes
+  );
+  const match = response.FaceMatches?.[0];
+  const face = match?.Face as { FaceId?: string; ExternalImageId?: string } | undefined;
+  const faceId = face?.FaceId ?? '';
+  if (!match || !faceId) return null;
+  return { faceId, similarity: match.Similarity ?? 0, externalImageId: face?.ExternalImageId };
+}
+
+export async function deleteFaceFromCollection(faceId: string, collectionId: string): Promise<boolean> {
+  if (!faceId) return false;
+  try {
+    await sendRekognitionCommand(
+      'DeleteFaces',
+      new DeleteFacesCommand({ CollectionId: collectionId, FaceIds: [faceId] })
+    );
+    console.log('[REKOGNITION-DELETE-COLLECTION]', faceId, collectionId);
+    return true;
+  } catch (error) {
+    console.error('[REKOGNITION-DELETE-COLLECTION] failed:', error);
+    return false;
+  }
+}
+
+export async function describeCollectionSize(collectionId: string): Promise<number> {
+  try {
+    const response = await sendRekognitionCommand<{ FaceCount?: number }>(
+      'DescribeCollection',
+      new DescribeCollectionCommand({ CollectionId: collectionId })
+    );
+    return response.FaceCount ?? 0;
+  } catch {
+    return 0;
+  }
 }
 
 export async function deleteFace(faceId: string): Promise<boolean> {
