@@ -91,6 +91,14 @@ export async function ensureCollectionExists(): Promise<void> {
 
   // PlayGuard uses a dedicated banned collection (not the standard enrollments pattern)
   await ensureCollectionByExactId('playguard-banned');
+
+  // SiteGuard collections
+  await ensureCollectionByExactId(process.env.SG_COLLECTION_AUTHORIZED  ?? 'hv-siteguard-authorized');
+  await ensureCollectionByExactId(process.env.SG_COLLECTION_BLACKLISTED ?? 'hv-siteguard-blacklisted');
+
+  // DriveGuard collections
+  await ensureCollectionByExactId(process.env.DG_COLLECTION_AUTHORIZED  ?? 'hv-driveguard-authorized');
+  await ensureCollectionByExactId(process.env.DG_COLLECTION_BLACKLISTED ?? 'hv-driveguard-blacklisted');
 }
 
 async function ensureCollectionByExactId(collectionId: string): Promise<void> {
