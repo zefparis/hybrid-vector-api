@@ -12,6 +12,8 @@ import playguardRouter from './routes/playguard';
 import { playguardApiKeyMiddleware } from './middleware/playguardApiKey';
 import siteguardRouter from './routes/siteguard';
 import { siteguardApiKeyMiddleware } from './middleware/siteguardApiKey';
+import driveguardRouter from './routes/driveguard';
+import { driveguardApiKeyMiddleware } from './middleware/driveguardApiKey';
 import { ensureCollectionExists } from './services/rekognitionService';
 import { registerCtnModule } from './ctn/ctn.module';
 
@@ -152,6 +154,20 @@ app.options(/^\/siteguard\//, (req: Request, res: Response) => {
   res.status(204).end();
 });
 app.use('/siteguard', siteguardApiKeyMiddleware, siteguardRouter);
+
+// ─── DRIVEGUARD ─────────────────────────────────────────────────────────────
+app.options(/^\/driveguard\//, (req: Request, res: Response) => {
+  const origin = req.headers.origin;
+  if (origin && isOriginAllowed(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-API-Key,X-Tenant-ID');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Vary', 'Origin');
+  }
+  res.status(204).end();
+});
+app.use('/driveguard', driveguardApiKeyMiddleware, driveguardRouter);
 
 // ─── CTN — Cognitive Trust Network ───────────────────────────────────────────
 registerCtnModule(app);
