@@ -8,6 +8,7 @@ import sessionRouter from './routes/session';
 import enrollRouter from './routes/enroll';
 import edguardRouter from './routes/edguard';
 import adminRouter from './routes/admin';
+import workguardRouter from './routes/workguard';
 import playguardRouter from './routes/playguard';
 import { playguardApiKeyMiddleware } from './middleware/playguardApiKey';
 import siteguardRouter from './routes/siteguard';
@@ -103,6 +104,9 @@ app.use(healthRouter);
 
 // Admin endpoints (read-only Supabase queries)
 app.use('/admin', adminRouter);
+
+// WorkGuard — NFC ID verification via Self SDK (X-Admin-Key gated)
+app.use('/workguard', workguardRouter);
 
 // HV core endpoints — protected by main HV API key
 app.use('/auth', apiKeyMiddleware);

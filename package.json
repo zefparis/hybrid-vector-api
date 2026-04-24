@@ -21,6 +21,7 @@
   "license": "ISC",
   "dependencies": {
     "@aws-sdk/client-rekognition": "^3.1014.0",
+    "@selfxyz/core": "^1.0.8",
     "@supabase/supabase-js": "^2.49.1",
     "@upstash/redis": "^1.37.0",
     "axios": "^1.6.7",
