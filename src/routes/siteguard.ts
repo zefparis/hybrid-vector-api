@@ -3,6 +3,7 @@ import { NextFunction, Request, Response, Router } from 'express';
 import { z } from 'zod';
 import {
   cleanBase64,
+  detectFacesForAge,
   enrollFaceToCollection,
   searchFaceInCollection,
   deleteFaceFromCollection,
@@ -57,19 +58,34 @@ router.post('/scan', async (req: Request, res: Response, next: NextFunction): Pr
 
     const imageBytes = await compressImageForRekognition(cleanBase64(selfie_b64));
 
-    const [blacklistResult, authorizedResult] = await Promise.allSettled([
+    // AWS Rekognition known limitation: tends to over-estimate age for children.
+    // For adult worker verification, this bias is acceptable as the default case.
+    // Flag if AgeRange.High < 16 — unlikely to be an adult worker, trigger manual review.
+    const [blacklistResult, authorizedResult, ageResult] = await Promise.allSettled([
       searchFaceInCollection(imageBytes, COLLECTION_BLACKLISTED, BLACKLIST_THRESHOLD),
       searchFaceInCollection(imageBytes, COLLECTION_AUTHORIZED,  AUTHORIZED_THRESHOLD),
+      detectFacesForAge(imageBytes),
     ]);
 
     const blacklist  = blacklistResult.status  === 'fulfilled' ? blacklistResult.value  : null;
     const authorized = authorizedResult.status === 'fulfilled' ? authorizedResult.value : null;
+    const ageData    = ageResult.status        === 'fulfilled' ? ageResult.value        : null;
 
-    // Priority: BLACKLISTED > UNAUTHORIZED > AUTHORIZED
+    const ageRange          = ageData?.ageRange ?? null;
+    const suspiciouslyYoung = ageRange ? ageRange.High < 16 : false;
+
+    // Priority: BLACKLISTED > UNAUTHORIZED (suspiciously young) > UNAUTHORIZED > AUTHORIZED
     let verdict: 'AUTHORIZED' | 'UNAUTHORIZED' | 'BLACKLISTED';
-    if (blacklist?.faceId)   verdict = 'BLACKLISTED';
-    else if (authorized?.faceId) verdict = 'AUTHORIZED';
-    else                         verdict = 'UNAUTHORIZED';
+    let suspiciouslyYoungNote: string | null = null;
+    if (blacklist?.faceId)            verdict = 'BLACKLISTED';
+    else if (suspiciouslyYoung) {
+      // Override even an AUTHORIZED match — if the face looks under 16 the
+      // enrollment record is suspect and a human must verify.
+      verdict = 'UNAUTHORIZED';
+      suspiciouslyYoungNote = 'Face detected appears too young for site access — manual verification required';
+    }
+    else if (authorized?.faceId)      verdict = 'AUTHORIZED';
+    else                              verdict = 'UNAUTHORIZED';
 
     const scanId    = randomUUID();
     const timestamp = new Date().toISOString();
@@ -91,6 +107,11 @@ router.post('/scan', async (req: Request, res: Response, next: NextFunction): Pr
         faceId:      blacklist?.faceId       ?? null,
         externalId:  blacklist?.externalImageId ?? null,
         similarity:  blacklist?.similarity    ?? null,
+      },
+      age: {
+        range: ageRange,
+        suspiciouslyYoung,
+        note: suspiciouslyYoungNote,
       },
       faceConfidence: authorized?.similarity ?? blacklist?.similarity ?? 0,
       timestamp,
