@@ -27,6 +27,8 @@ const STATIC_ALLOWED_ORIGINS: readonly string[] = [
   'https://hybrid-vector-frontend.vercel.app',
   'https://hybrid-vector.com',
   'https://www.hybrid-vector.com',
+  'https://hcs-u7.info',
+  'https://www.hcs-u7.info',
   'https://localhost',        // ← Capacitor Android
   'capacitor://localhost',    // ← Capacitor iOS
   'http://localhost:5173',

@@ -141,4 +141,126 @@ router.get('/edguard/enrollments', async (req: Request, res: Response, next: Nex
   }
 });
 
+// ─── PLAYGUARD PROXY (admin read-only) ──────────────────────────────────────
+// Admin dashboard uses X-Admin-Key; the tenant Guard API keys are not shared
+// with admin. These proxy endpoints query Supabase directly, filtered by the
+// default tenant used in the Guard middleware fallback.
+
+const PLAYGUARD_TENANT = process.env.PG_TENANT_ID || 'playguard-demo';
+const SITEGUARD_TENANT = process.env.SG_TENANT_ID || 'siteguard-demo';
+
+router.get('/playguard/events', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const client = requireSupabase();
+    const limit = Math.min(Number(req.query.limit) || 200, 500);
+    const { data, error } = await client
+      .from('playguard_events')
+      .select('*')
+      .eq('tenant_id', PLAYGUARD_TENANT)
+      .order('scanned_at', { ascending: false })
+      .limit(limit);
+    if (error) throw new AppError(500, 'SUPABASE_QUERY_FAILED', error.message);
+    res.json({ events: data ?? [] });
+  } catch (e) { next(e); }
+});
+
+router.get('/playguard/bans', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const client = requireSupabase();
+    const limit = Math.min(Number(req.query.limit) || 500, 1000);
+    const { data, error } = await client
+      .from('playguard_bans')
+      .select('*')
+      .eq('tenant_id', PLAYGUARD_TENANT)
+      .order('banned_at', { ascending: false })
+      .limit(limit);
+    if (error) throw new AppError(500, 'SUPABASE_QUERY_FAILED', error.message);
+    res.json({ bans: data ?? [] });
+  } catch (e) { next(e); }
+});
+
+router.get('/playguard/status', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const client = requireSupabase();
+    const [scansRes, bansRes] = await Promise.all([
+      client.from('playguard_events').select('id', { count: 'exact', head: true }).eq('tenant_id', PLAYGUARD_TENANT),
+      client.from('playguard_bans').select('face_id', { count: 'exact', head: true }).eq('tenant_id', PLAYGUARD_TENANT),
+    ]);
+    if (scansRes.error) throw new AppError(500, 'SUPABASE_QUERY_FAILED', scansRes.error.message);
+    if (bansRes.error) throw new AppError(500, 'SUPABASE_QUERY_FAILED', bansRes.error.message);
+    res.json({
+      totalScans: scansRes.count ?? 0,
+      totalBans: bansRes.count ?? 0,
+      tenant: PLAYGUARD_TENANT,
+    });
+  } catch (e) { next(e); }
+});
+
+// ─── SITEGUARD PROXY (admin read-only) ──────────────────────────────────────
+
+router.get('/siteguard/events', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const client = requireSupabase();
+    const limit = Math.min(Number(req.query.limit) || 200, 500);
+    const { data, error } = await client
+      .from('siteguard_events')
+      .select('*')
+      .eq('tenant_id', SITEGUARD_TENANT)
+      .order('scanned_at', { ascending: false })
+      .limit(limit);
+    if (error) throw new AppError(500, 'SUPABASE_QUERY_FAILED', error.message);
+    res.json({ events: data ?? [] });
+  } catch (e) { next(e); }
+});
+
+router.get('/siteguard/workers', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const client = requireSupabase();
+    const limit = Math.min(Number(req.query.limit) || 500, 1000);
+    const { data, error } = await client
+      .from('siteguard_workers')
+      .select('*')
+      .eq('tenant_id', SITEGUARD_TENANT)
+      .order('enrolled_at', { ascending: false })
+      .limit(limit);
+    if (error) throw new AppError(500, 'SUPABASE_QUERY_FAILED', error.message);
+    res.json({ workers: data ?? [] });
+  } catch (e) { next(e); }
+});
+
+router.get('/siteguard/blacklist', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const client = requireSupabase();
+    const limit = Math.min(Number(req.query.limit) || 500, 1000);
+    const { data, error } = await client
+      .from('siteguard_blacklist')
+      .select('*')
+      .eq('tenant_id', SITEGUARD_TENANT)
+      .order('banned_at', { ascending: false })
+      .limit(limit);
+    if (error) throw new AppError(500, 'SUPABASE_QUERY_FAILED', error.message);
+    res.json({ blacklist: data ?? [] });
+  } catch (e) { next(e); }
+});
+
+router.get('/siteguard/status', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const client = requireSupabase();
+    const [scansRes, workersRes, blacklistRes] = await Promise.all([
+      client.from('siteguard_events').select('id', { count: 'exact', head: true }).eq('tenant_id', SITEGUARD_TENANT),
+      client.from('siteguard_workers').select('face_id', { count: 'exact', head: true }).eq('tenant_id', SITEGUARD_TENANT),
+      client.from('siteguard_blacklist').select('face_id', { count: 'exact', head: true }).eq('tenant_id', SITEGUARD_TENANT),
+    ]);
+    if (scansRes.error) throw new AppError(500, 'SUPABASE_QUERY_FAILED', scansRes.error.message);
+    if (workersRes.error) throw new AppError(500, 'SUPABASE_QUERY_FAILED', workersRes.error.message);
+    if (blacklistRes.error) throw new AppError(500, 'SUPABASE_QUERY_FAILED', blacklistRes.error.message);
+    res.json({
+      totalScans: scansRes.count ?? 0,
+      totalWorkers: workersRes.count ?? 0,
+      totalBlacklisted: blacklistRes.count ?? 0,
+      tenant: SITEGUARD_TENANT,
+    });
+  } catch (e) { next(e); }
+});
+
 export default router;
