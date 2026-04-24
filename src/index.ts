@@ -9,6 +9,7 @@ import enrollRouter from './routes/enroll';
 import edguardRouter from './routes/edguard';
 import adminRouter from './routes/admin';
 import workguardRouter from './routes/workguard';
+import signalsRouter from './routes/signals';
 import playguardRouter from './routes/playguard';
 import { playguardApiKeyMiddleware } from './middleware/playguardApiKey';
 import siteguardRouter from './routes/siteguard';
@@ -30,6 +31,7 @@ const STATIC_ALLOWED_ORIGINS: readonly string[] = [
   'https://www.hybrid-vector.com',
   'https://hcs-u7.info',
   'https://www.hcs-u7.info',
+  'https://workguard.hcs-u7.info',
   'https://localhost',        // ← Capacitor Android
   'capacitor://localhost',    // ← Capacitor iOS
   'http://localhost:5173',
@@ -107,6 +109,9 @@ app.use('/admin', adminRouter);
 
 // WorkGuard — NFC ID verification via Self SDK (X-Admin-Key gated)
 app.use('/workguard', workguardRouter);
+
+// WorkGuard — behavioral signals ingestion (no auth, fire-and-forget)
+app.use('/api', signalsRouter);
 
 // HV core endpoints — protected by main HV API key
 app.use('/auth', apiKeyMiddleware);
