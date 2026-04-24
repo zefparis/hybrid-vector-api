@@ -14,7 +14,9 @@ import { compressImageForRekognition } from '../lib/imageUtils';
 import { AppError } from '../types';
 
 const PLAYGUARD_BANNED_COLLECTION = 'playguard-banned';
-const DEFAULT_AGE_THRESHOLD = Number(process.env.PG_AGE_THRESHOLD ?? 18);
+// Default raised to 21 (from 18) to compensate for AWS Rekognition's known
+// tendency to over-age children. VERIFY_AGE verdict flags the ambiguous zone.
+const DEFAULT_AGE_THRESHOLD = Number(process.env.PG_AGE_THRESHOLD ?? 21);
 const DEFAULT_MATCH_THRESHOLD = Number(process.env.PG_MATCH_THRESHOLD ?? 80);
 
 const router = Router();
@@ -59,13 +61,20 @@ router.post('/scan', async (req: Request, res: Response, next: NextFunction): Pr
     }
 
     const ageHigh = age.ageRange.High;
+    const ageLow  = age.ageRange.Low;
     const isMinor = ageHigh < DEFAULT_AGE_THRESHOLD;
+    // Rekognition over-ages children; if Low < 25 and not already a minor by
+    // our (conservative) threshold, the estimate is considered uncertain and
+    // the operator must verify physical ID.
+    const isAmbiguous = ageLow < 25 && !isMinor;
     const isBanned = Boolean(ban?.faceId);
 
-    let verdict: 'ALLOWED' | 'MINOR' | 'BANNED';
-    if (isBanned) verdict = 'BANNED';
-    else if (isMinor) verdict = 'MINOR';
-    else verdict = 'ALLOWED';
+    // Verdict priority: BANNED > MINOR > VERIFY_AGE > ALLOWED
+    let verdict: 'ALLOWED' | 'MINOR' | 'BANNED' | 'VERIFY_AGE';
+    if (isBanned)           verdict = 'BANNED';
+    else if (isMinor)       verdict = 'MINOR';
+    else if (isAmbiguous)   verdict = 'VERIFY_AGE';
+    else                    verdict = 'ALLOWED';
 
     const result = {
       scanId: randomUUID(),
@@ -74,6 +83,11 @@ router.post('/scan', async (req: Request, res: Response, next: NextFunction): Pr
       age: {
         range: age.ageRange,
         isMinor,
+        isAmbiguous,
+        threshold: DEFAULT_AGE_THRESHOLD,
+        ambiguityNote: isAmbiguous
+          ? 'AWS Rekognition age estimate uncertain — physical ID check required'
+          : null,
         estimatedAge: Math.round((age.ageRange.Low + age.ageRange.High) / 2),
       },
       ban: {
