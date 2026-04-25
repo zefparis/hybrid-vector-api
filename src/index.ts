@@ -31,7 +31,8 @@ const STATIC_ALLOWED_ORIGINS: readonly string[] = [
   'https://www.hybrid-vector.com',
   'https://hcs-u7.info',
   'https://www.hcs-u7.info',
-  'https://workguard.hcs-u7.info',
+  // workguard.hcs-u7.info removed — workguard is now a native React Native
+  // app (workguard-rn / com.hcs.workguard) which does not issue CORS requests.
   'https://localhost',        // ← Capacitor Android
   'capacitor://localhost',    // ← Capacitor iOS
   'http://localhost:5173',
