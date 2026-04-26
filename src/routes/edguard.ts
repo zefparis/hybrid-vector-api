@@ -488,6 +488,7 @@ router.post(
 router.post(
   '/verify',
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const startTime = Date.now();
     try {
       const validatedBody = verifySchema.parse(req.body);
       const { selfie_b64, first_name, last_name, tenant_id } = validatedBody;
@@ -640,10 +641,17 @@ router.post(
       });
 
       // Fire-and-forget: push verification event to HCS-U7 dashboard
+      // Payload aligned with HvSessionIngestSchema
+      // (hcs-u7-backend/src/routes/hybrid-vector/hybrid-vector.routes.ts).
       if (config.HCS_INGEST_URL && config.HCS_WORKER_SHARED_SECRET) {
         const ingestUrl = config.HCS_INGEST_URL;
         const secret = config.HCS_WORKER_SHARED_SECRET;
-        const result = match.similarity >= 80 ? 'match' : 'no_match';
+        const verified = match.similarity >= 80;
+        const similarity = match.similarity;
+        // Schema requires breakdown values in [0..1], not [0..100].
+        const facialNormalized = Math.max(0, Math.min(1, similarity / 100));
+        const confidenceLevel: 'HIGH' | 'MEDIUM' | 'LOW' =
+          similarity >= 90 ? 'HIGH' : similarity >= 70 ? 'MEDIUM' : 'LOW';
 
         setImmediate(() => {
           fetch(ingestUrl, {
@@ -654,19 +662,33 @@ router.post(
               'X-HCS-Worker-Auth': secret,
             },
             body: JSON.stringify({
+              hv_session_id: randomUUID(),
               tenant_id: resolvedTenantId,
-              event: 'verification',
-              result,
-              guard_type: 'edguard',
-              timestamp: Date.now(),
+              trust_score: Math.round(similarity),
+              is_human: verified,
+              confidence_level: confidenceLevel,
+              breakdown: {
+                facial: facialNormalized,
+                vocal: 0,
+                reflex: 0,
+                behavioral: 0,
+                mouse: 0,
+              },
               metadata: {
+                device_type: 'mobile',
+                processing_ms: Date.now() - startTime,
+                timestamp: new Date().toISOString(),
+                deepface_model: 'rekognition',
+                guard_type: 'edguard',
                 student_id: enrollment.student_id,
-                similarity: match.similarity,
                 first_name: enrollment.first_name,
                 last_name: enrollment.last_name,
               },
             }),
-          }).catch(() => {}); // Silent — never block, never throw
+          }).catch((err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error('[EdGuard ingest error]', message);
+          });
         });
       }
     } catch (error) {
