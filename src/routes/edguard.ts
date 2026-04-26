@@ -92,6 +92,14 @@ const checkpointSchema = z.object({
   session_id: z.string().min(1, 'session_id is required'),
 });
 
+const authPaymentSignalsSchema = z.object({
+  student_id: z.string().min(1, 'student_id is required'),
+  tenant_id: z.string().min(1, 'tenant_id is required'),
+  vocal_score: z.number().min(0).max(1),
+  behavioral_score: z.number().min(0).max(1),
+  reaction_ms: z.number().int().min(0),
+});
+
 const router = Router();
 
 // TEMP DEBUG: confirm the route is hit and the header is present (auth happens at app-level)
@@ -776,6 +784,152 @@ router.post(
             ({ error: insertErr }) => { if (insertErr) console.error('[EDGUARD] checkpoint insert failed:', insertErr.message); },
             () => {}
           );
+      }
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /edguard/auth-payment-signals
+ *
+ * Enrichment endpoint for the simplified /auth-payment flow.
+ * Receives vocal + behavioral + reflex signals captured *after* the
+ * initial /verify call and:
+ *   1. Updates the most recent edguard_sessions row for this student
+ *      with the additional scores.
+ *   2. Re-emits an enriched payload to HCS-U7 (HCS_INGEST_URL) with the
+ *      real per-channel breakdown (facial / vocal / reflex / behavioral).
+ *
+ * The decision itself stays client-side; this route is fire-and-forget
+ * for the caller and returns { success: true } as soon as Supabase is
+ * touched (HCS push is dispatched via setImmediate).
+ */
+router.post(
+  '/auth-payment-signals',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const startTime = Date.now();
+    try {
+      const body = authPaymentSignalsSchema.parse(req.body);
+      const resolvedTenantId = req.tenant_id ?? body.tenant_id;
+
+      if (req.tenant_id && req.tenant_id !== body.tenant_id) {
+        sendApiError(
+          res,
+          403,
+          'TENANT_MISMATCH',
+          'tenant_id does not match the API key'
+        );
+        return;
+      }
+
+      // Map reaction time to reflex score (per product spec).
+      const reflexScore =
+        body.reaction_ms < 300 ? 1.0 :
+        body.reaction_ms < 600 ? 0.7 : 0.4;
+
+      const client = getSupabaseClient();
+      const { data: sessions, error: selectErr } = await client
+        .from('edguard_sessions')
+        .select('id, similarity_score, first_name, last_name')
+        .eq('tenant_id', resolvedTenantId)
+        .eq('student_id', body.student_id)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (selectErr) {
+        throw new AppError(500, 'SUPABASE_QUERY_FAILED', selectErr.message);
+      }
+
+      const session = (sessions ?? [])[0] as
+        | { id: string; similarity_score: number | null; first_name: string | null; last_name: string | null }
+        | undefined;
+
+      let facialScore = 0;
+      let firstName: string | null = null;
+      let lastName: string | null = null;
+
+      if (session) {
+        facialScore = Math.max(0, Math.min(1, (session.similarity_score ?? 0) / 100));
+        firstName = session.first_name ?? null;
+        lastName = session.last_name ?? null;
+
+        const { error: updErr } = await client
+          .from('edguard_sessions')
+          .update({
+            vocal_score: body.vocal_score,
+            reflex_score: reflexScore,
+            behavioral_score: body.behavioral_score,
+            reaction_ms: body.reaction_ms,
+          })
+          .eq('id', session.id);
+
+        if (updErr) {
+          console.error('[AUTH-PAY-SIGNALS] update failed:', updErr.message);
+        }
+      } else {
+        console.warn('[AUTH-PAY-SIGNALS] no prior session for student', {
+          tenant_id: resolvedTenantId,
+          student_id: body.student_id,
+        });
+      }
+
+      res.json({ success: true });
+
+      // Fire-and-forget: enriched HCS-U7 ingest with real per-channel breakdown.
+      if (config.HCS_INGEST_URL && config.HCS_WORKER_SHARED_SECRET) {
+        const ingestUrl = config.HCS_INGEST_URL;
+        const secret = config.HCS_WORKER_SHARED_SECRET;
+        const trustScoreRaw =
+          facialScore * 0.4 +
+          body.vocal_score * 0.2 +
+          reflexScore * 0.2 +
+          body.behavioral_score * 0.2;
+        const trustScore = Math.max(0, Math.min(100, Math.round(trustScoreRaw * 100)));
+        const isHuman = trustScore >= 70;
+        const confidenceLevel: 'HIGH' | 'MEDIUM' | 'LOW' =
+          trustScore >= 85 ? 'HIGH' : trustScore >= 65 ? 'MEDIUM' : 'LOW';
+
+        setImmediate(() => {
+          fetch(ingestUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Worker-Auth': secret,
+              'X-HCS-Worker-Auth': secret,
+            },
+            body: JSON.stringify({
+              hv_session_id: randomUUID(),
+              tenant_id: resolvedTenantId,
+              trust_score: trustScore,
+              is_human: isHuman,
+              confidence_level: confidenceLevel,
+              breakdown: {
+                facial: facialScore,
+                vocal: body.vocal_score,
+                reflex: reflexScore,
+                behavioral: body.behavioral_score,
+                mouse: 0,
+              },
+              metadata: {
+                device_type: 'mobile',
+                processing_ms: Date.now() - startTime,
+                timestamp: new Date().toISOString(),
+                deepface_model: 'rekognition',
+                guard_type: 'edguard',
+                flow: 'auth-payment',
+                student_id: body.student_id,
+                first_name: firstName,
+                last_name: lastName,
+                reaction_ms: body.reaction_ms,
+              },
+            }),
+          }).catch((err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error('[EdGuard auth-payment ingest error]', message);
+          });
+        });
       }
     } catch (error) {
       next(error);
